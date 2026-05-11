@@ -11,6 +11,7 @@ from ultralytics.data.build import load_inference_source
 from ultralytics.engine.model import Model
 from ultralytics.models import yolo
 from ultralytics.nn.tasks import (
+    AttrDetectionModel,
     ClassificationModel,
     DetectionModel,
     OBBModel,
@@ -114,6 +115,12 @@ class YOLO(Model):
                 "trainer": yolo.obb.OBBTrainer,
                 "validator": yolo.obb.OBBValidator,
                 "predictor": yolo.obb.OBBPredictor,
+            },
+            "detectattr": {
+                "model": AttrDetectionModel,
+                "trainer": yolo.detectattr.AttrDetectionTrainer,
+                "validator": yolo.detectattr.AttrDetectionValidator,
+                "predictor": yolo.detectattr.AttrDetectionPredictor,
             },
         }
 

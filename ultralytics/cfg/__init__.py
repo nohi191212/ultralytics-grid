@@ -63,6 +63,7 @@ TASK2DATA = {
     "classify": "imagenet10",
     "pose": "coco8-pose.yaml",
     "obb": "dota8.yaml",
+    "detectattr": "coco8.yaml",
 }
 TASK2CALIBRATIONDATA = {
     "detect": "coco128.yaml",
@@ -77,6 +78,7 @@ TASK2MODEL = {
     "classify": "yolo26n-cls.pt",
     "pose": "yolo26n-pose.pt",
     "obb": "yolo26n-obb.pt",
+    "detectattr": "yolo26s-face.pt",
 }
 TASK2METRIC = {
     "detect": "metrics/mAP50-95(B)",
@@ -84,6 +86,7 @@ TASK2METRIC = {
     "classify": "metrics/accuracy_top1",
     "pose": "metrics/mAP50-95(P)",
     "obb": "metrics/mAP50-95(B)",
+    "detectattr": "metrics/mAP50-95(B)",
 }
 
 ARGV = sys.argv or ["", ""]  # sometimes sys.argv = []

@@ -793,23 +793,36 @@ class Mosaic(BaseMixTransform):
         if not mosaic_labels:
             return {}
         cls = []
+        gender = []
+        race = []
+        body_type = []
         instances = []
         imgsz = self.imgsz * 2  # mosaic imgsz
         for labels in mosaic_labels:
+            nl = len(labels["cls"])
             cls.append(labels["cls"])
             instances.append(labels["instances"])
+            gender.append(labels.get("gender", np.full((nl, 1), -1, dtype=np.int64)))
+            race.append(labels.get("race", np.full((nl, 1), -1, dtype=np.int64)))
+            body_type.append(labels.get("body_type", np.full((nl, 1), -1, dtype=np.int64)))
         # Final labels
         final_labels = {
             "im_file": mosaic_labels[0]["im_file"],
             "ori_shape": mosaic_labels[0]["ori_shape"],
             "resized_shape": (imgsz, imgsz),
             "cls": np.concatenate(cls, 0),
+            "gender": np.concatenate(gender, 0),
+            "race": np.concatenate(race, 0),
+            "body_type": np.concatenate(body_type, 0),
             "instances": Instances.concatenate(instances, axis=0),
             "mosaic_border": self.border,
         }
         final_labels["instances"].clip(imgsz, imgsz)
         good = final_labels["instances"].remove_zero_area_boxes()
         final_labels["cls"] = final_labels["cls"][good]
+        final_labels["gender"] = final_labels["gender"][good]
+        final_labels["race"] = final_labels["race"][good]
+        final_labels["body_type"] = final_labels["body_type"][good]
         if "texts" in mosaic_labels[0]:
             final_labels["texts"] = mosaic_labels[0]["texts"]
         return final_labels
@@ -2050,6 +2063,9 @@ class Format:
         img = labels.pop("img")
         h, w = img.shape[:2]
         cls = labels.pop("cls")
+        gender = labels.pop("gender", None)
+        race = labels.pop("race", None)
+        body_type = labels.pop("body_type", None)
         instances = labels.pop("instances")
         instances.convert_bbox(format=self.bbox_format)
         instances.denormalize(w, h)
@@ -2084,6 +2100,9 @@ class Format:
         labels["img"] = self._format_img(img)
         labels["cls"] = torch.from_numpy(cls) if nl else torch.zeros(nl, 1)
         labels["bboxes"] = torch.from_numpy(instances.bboxes) if nl else torch.zeros((nl, 4))
+        labels["gender"] = torch.from_numpy(gender) if nl and gender is not None else torch.full((nl, 1), -1, dtype=torch.int64)
+        labels["race"] = torch.from_numpy(race) if nl and race is not None else torch.full((nl, 1), -1, dtype=torch.int64)
+        labels["body_type"] = torch.from_numpy(body_type) if nl and body_type is not None else torch.full((nl, 1), -1, dtype=torch.int64)
         if self.return_keypoint:
             labels["keypoints"] = (
                 torch.empty(0, 3) if instances.keypoints is None else torch.from_numpy(instances.keypoints)

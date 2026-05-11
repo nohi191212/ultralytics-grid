@@ -20,7 +20,7 @@ from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "OBB", "Classify", "Detect", "Pose", "RTDETRDecoder", "Segment", "YOLOEDetect", "YOLOESegment", "v10Detect"
+__all__ = "DetectAttr", "OBB", "Classify", "Detect", "Pose", "RTDETRDecoder", "Segment", "YOLOEDetect", "YOLOESegment", "v10Detect"
 
 
 class Detect(nn.Module):
@@ -249,6 +249,105 @@ class Detect(nn.Module):
     def fuse(self) -> None:
         """Remove the one2many head for inference optimization."""
         self.cv2 = self.cv3 = None
+
+
+class DetectAttr(Detect):
+    """YOLO DetectAttr head for detection + attribute prediction models.
+
+    This class extends the Detect head to include gender, race, and body_type attribute predictions alongside
+    bounding boxes and class probabilities.
+
+    Attributes:
+        ng (int): Number of gender classes.
+        nr (int): Number of race classes.
+        nb (int): Number of body_type classes.
+        cv4 (nn.ModuleList): Convolution layers for gender prediction.
+        cv5 (nn.ModuleList): Convolution layers for race prediction.
+        cv6 (nn.ModuleList): Convolution layers for body_type prediction.
+        one2one_cv4/cv5/cv6 (nn.ModuleList): One-to-one copies for end-to-end training.
+
+    Methods:
+        forward_head: Return model outputs including attribute logits.
+        _inference: Decode and concatenate attribute predictions.
+        postprocess: Post-process predictions including attributes.
+        bias_init: Initialize attribute head biases.
+        fuse: Remove one2many heads for inference.
+    """
+
+    def __init__(self, nc=80, ng=2, nr=7, nb=2, reg_max=1, end2end=True, ch=()):
+        super().__init__(nc, reg_max, end2end, ch)
+        self.ng = ng
+        self.nr = nr
+        self.nb = nb
+        self.no = nc + reg_max * 4 + ng + nr + nb
+
+        c4 = max(ch[0] // 4, max(ng, nr, nb))
+        self.cv4 = nn.ModuleList(
+            nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.ng, 1)) for x in ch
+        )
+        self.cv5 = nn.ModuleList(
+            nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nr, 1)) for x in ch
+        )
+        self.cv6 = nn.ModuleList(
+            nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nb, 1)) for x in ch
+        )
+        if end2end:
+            self.one2one_cv4 = copy.deepcopy(self.cv4)
+            self.one2one_cv5 = copy.deepcopy(self.cv5)
+            self.one2one_cv6 = copy.deepcopy(self.cv6)
+
+    @property
+    def one2many(self):
+        return dict(box_head=self.cv2, cls_head=self.cv3,
+                    gender_head=self.cv4, race_head=self.cv5, body_head=self.cv6)
+
+    @property
+    def one2one(self):
+        return dict(box_head=self.one2one_cv2, cls_head=self.one2one_cv3,
+                    gender_head=self.one2one_cv4, race_head=self.one2one_cv5, body_head=self.one2one_cv6)
+
+    def forward_head(self, x, box_head=None, cls_head=None, gender_head=None, race_head=None, body_head=None):
+        preds = super().forward_head(x, box_head, cls_head)
+        if gender_head is not None:
+            bs = x[0].shape[0]
+            preds["gender"] = torch.cat(
+                [gender_head[i](x[i]).view(bs, self.ng, -1) for i in range(self.nl)], dim=-1
+            )
+            preds["race"] = torch.cat(
+                [race_head[i](x[i]).view(bs, self.nr, -1) for i in range(self.nl)], dim=-1
+            )
+            preds["body_type"] = torch.cat(
+                [body_head[i](x[i]).view(bs, self.nb, -1) for i in range(self.nl)], dim=-1
+            )
+        return preds
+
+    def _inference(self, x):
+        preds = super()._inference(x)
+        return torch.cat([preds, x["gender"], x["race"], x["body_type"]], dim=1)
+
+    def postprocess(self, preds):
+        boxes, scores, gender_logits, race_logits, body_logits = preds.split(
+            [4, self.nc, self.ng, self.nr, self.nb], dim=-1
+        )
+        scores, conf, idx = self.get_topk_index(scores, self.max_det)
+        boxes = boxes.gather(dim=1, index=idx.repeat(1, 1, 4))
+        gender_logits = gender_logits.gather(dim=1, index=idx.repeat(1, 1, self.ng))
+        race_logits = race_logits.gather(dim=1, index=idx.repeat(1, 1, self.nr))
+        body_logits = body_logits.gather(dim=1, index=idx.repeat(1, 1, self.nb))
+        return torch.cat([boxes, scores, conf, gender_logits, race_logits, body_logits], dim=-1)
+
+    def bias_init(self):
+        super().bias_init()
+        for cv in [self.cv4, self.cv5, self.cv6]:
+            for layer in cv:
+                layer[-1].bias.data.zero_()
+        if self.end2end:
+            for cv in [self.one2one_cv4, self.one2one_cv5, self.one2one_cv6]:
+                for layer in cv:
+                    layer[-1].bias.data.zero_()
+
+    def fuse(self):
+        self.cv2 = self.cv3 = self.cv4 = self.cv5 = self.cv6 = None
 
 
 class Segment(Detect):

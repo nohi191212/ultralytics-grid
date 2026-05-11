@@ -45,6 +45,7 @@ from ultralytics.nn.modules import (
     Conv2,
     ConvTranspose,
     Detect,
+    DetectAttr,
     DWConv,
     DWConvTranspose2d,
     Focus,
@@ -79,6 +80,7 @@ from ultralytics.utils.loss import (
     E2ELoss,
     PoseLoss26,
     v8ClassificationLoss,
+    v8DetectionAttrLoss,
     v8DetectionLoss,
     v8OBBLoss,
     v8PoseLoss,
@@ -512,6 +514,25 @@ class DetectionModel(BaseModel):
     def init_criterion(self):
         """Initialize the loss criterion for the DetectionModel."""
         return E2ELoss(self) if getattr(self, "end2end", False) else v8DetectionLoss(self)
+
+
+class AttrDetectionModel(DetectionModel):
+    """YOLO DetectAttr model for detection with gender, race, and body_type attributes.
+
+    This class extends DetectionModel to handle attribute prediction alongside object detection.
+    """
+
+    def __init__(self, cfg="yolo26-attr.yaml", ch=3, nc=None, verbose=True):
+        super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
+        ng = self.yaml.get("ng", 2)
+        nr = self.yaml.get("nr", 7)
+        nb = self.yaml.get("nb", 2)
+        self.gender_names = {i: str(i) for i in range(ng)}
+        self.race_names = {i: str(i) for i in range(nr)}
+        self.body_names = {i: str(i) for i in range(nb)}
+
+    def init_criterion(self):
+        return E2ELoss(self, v8DetectionAttrLoss) if getattr(self, "end2end", False) else v8DetectionAttrLoss(self)
 
 
 class OBBModel(DetectionModel):
@@ -1564,6 +1585,7 @@ def parse_model(d, ch, verbose=True):
     legacy = True  # backward compatibility for v3/v5/v8/v9 models
     max_channels = float("inf")
     nc, act, scales, end2end = (d.get(x) for x in ("nc", "activation", "scales", "end2end"))
+    ng, nr, nb = (d.get(x, 0) for x in ("ng", "nr", "nb"))
     reg_max = d.get("reg_max", 16)
     depth, width, kpt_shape = (d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape"))
     scale = d.get("scale")
@@ -1691,6 +1713,7 @@ def parse_model(d, ch, verbose=True):
         elif m in frozenset(
             {
                 Detect,
+                DetectAttr,
                 WorldDetect,
                 YOLOEDetect,
                 Segment,
@@ -1706,7 +1729,7 @@ def parse_model(d, ch, verbose=True):
             args.extend([reg_max, end2end, [ch[x] for x in f]])
             if m is Segment or m is YOLOESegment or m is Segment26 or m is YOLOESegment26:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, YOLOEDetect, Segment, Segment26, YOLOESegment, YOLOESegment26, Pose, Pose26, OBB, OBB26}:
+            if m in {Detect, DetectAttr, YOLOEDetect, Segment, Segment26, YOLOESegment, YOLOESegment26, Pose, Pose26, OBB, OBB26}:
                 m.legacy = legacy
         elif m is v10Detect:
             args.append([ch[x] for x in f])
@@ -1794,6 +1817,8 @@ def guess_model_task(model):
         m = cfg["head"][-1][-2].lower()  # output module name
         if m in {"classify", "classifier", "cls", "fc"}:
             return "classify"
+        if "detectattr" in m:
+            return "detectattr"
         if "detect" in m:
             return "detect"
         if "segment" in m:
@@ -1824,6 +1849,8 @@ def guess_model_task(model):
                 return "pose"
             elif isinstance(m, OBB):
                 return "obb"
+            elif isinstance(m, DetectAttr):
+                return "detectattr"
             elif isinstance(m, (Detect, WorldDetect, YOLOEDetect, v10Detect)):
                 return "detect"
 

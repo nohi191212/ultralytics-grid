@@ -477,6 +477,115 @@ class v8DetectionLoss:
         return loss * batch_size, loss_detach
 
 
+class v8DetectionAttrLoss(v8DetectionLoss):
+    """Criterion class for computing training losses for YOLOv8 detection with attributes."""
+
+    def __init__(self, model, tal_topk: int = 10, tal_topk2: int | None = None):
+        super().__init__(model, tal_topk, tal_topk2)
+        head = model.model[-1]  # DetectAttr
+        self.ng, self.nr, self.nb = head.ng, head.nr, head.nb
+        self.no = head.no
+        self.ce_gender = nn.CrossEntropyLoss(reduction="none")
+        self.ce_race = nn.CrossEntropyLoss(reduction="none")
+        self.ce_body = nn.CrossEntropyLoss(reduction="none")
+
+    def get_assigned_targets_and_loss(self, preds, batch):
+        loss = torch.zeros(6, device=self.device)  # box, cls, dfl, gender, race, body
+        pred_distri, pred_scores = (
+            preds["boxes"].permute(0, 2, 1).contiguous(),
+            preds["scores"].permute(0, 2, 1).contiguous(),
+        )
+        anchor_points, stride_tensor = make_anchors(preds["feats"], self.stride, 0.5)
+
+        dtype = pred_scores.dtype
+        batch_size = pred_scores.shape[0]
+        imgsz = torch.tensor(preds["feats"][0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]
+
+        # Targets
+        targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1)
+        targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
+        gt_labels, gt_bboxes = targets.split((1, 4), 2)  # cls, xyxy
+        mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0.0)
+
+        # Pboxes
+        pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
+
+        _, target_bboxes, target_scores, fg_mask, target_gt_idx = self.assigner(
+            pred_scores.detach().sigmoid(),
+            (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
+            anchor_points * stride_tensor,
+            gt_labels,
+            gt_bboxes,
+            mask_gt,
+        )
+
+        target_scores_sum = max(target_scores.sum(), 1)
+
+        # Cls loss with optional class weighting
+        bce_loss = self.bce(pred_scores, target_scores.to(dtype))
+        if self.class_weights is not None:
+            bce_loss *= self.class_weights
+        loss[1] = bce_loss.sum() / target_scores_sum
+
+        # Bbox loss
+        if fg_mask.sum():
+            loss[0], loss[2] = self.bbox_loss(
+                pred_distri, pred_bboxes, anchor_points,
+                target_bboxes / stride_tensor, target_scores, target_scores_sum,
+                fg_mask, imgsz, stride_tensor,
+            )
+
+        # Attribute loss — only on positive anchors
+        if fg_mask.sum():
+            pred_gender = preds["gender"].permute(0, 2, 1).contiguous()  # (bs, na, ng)
+            pred_race = preds["race"].permute(0, 2, 1).contiguous()      # (bs, na, nr)
+            pred_body = preds["body_type"].permute(0, 2, 1).contiguous() # (bs, na, nb)
+
+            na = pred_gender.shape[1]
+            gender_tgt = torch.full((batch_size, na), -1, dtype=torch.long, device=self.device)
+            race_tgt = torch.full((batch_size, na), -1, dtype=torch.long, device=self.device)
+            body_tgt = torch.full((batch_size, na), -1, dtype=torch.long, device=self.device)
+
+            for i in range(batch_size):
+                img_mask = batch["batch_idx"].view(-1) == i
+                if not img_mask.any():
+                    continue
+                gt_idx_i = target_gt_idx[i]  # (na,)
+                pos_i = gt_idx_i >= 0
+                if not pos_i.any():
+                    continue
+                # Get instance attributes for this image
+                idx_start = (batch["batch_idx"] == i).nonzero(as_tuple=True)[0]
+                if len(idx_start) == 0:
+                    continue
+                start, end = idx_start[0].item(), idx_start[-1].item() + 1
+                inst_gender = batch["gender"].view(-1)[start:end].long()
+                inst_race = batch["race"].view(-1)[start:end].long()
+                inst_body = batch["body_type"].view(-1)[start:end].long()
+                indices = gt_idx_i[pos_i].long()
+                gender_tgt[i, pos_i] = inst_gender[indices]
+                race_tgt[i, pos_i] = inst_race[indices]
+                body_tgt[i, pos_i] = inst_body[indices]
+
+            valid_mask = (gender_tgt >= 0) & (gender_tgt < self.ng)
+            if valid_mask.sum() > 0:
+                loss[3] = self.ce_gender(pred_gender[valid_mask], gender_tgt[valid_mask]).sum() / target_scores_sum
+            valid_mask = (race_tgt >= 0) & (race_tgt < self.nr)
+            if valid_mask.sum() > 0:
+                loss[4] = self.ce_race(pred_race[valid_mask], race_tgt[valid_mask]).sum() / target_scores_sum
+            valid_mask = (body_tgt >= 0) & (body_tgt < self.nb)
+            if valid_mask.sum() > 0:
+                loss[5] = self.ce_body(pred_body[valid_mask], body_tgt[valid_mask]).sum() / target_scores_sum
+
+        loss[0] *= self.hyp.box
+        loss[1] *= self.hyp.cls
+        loss[2] *= self.hyp.dfl
+        loss[3] *= self.hyp.get("gender", 1.0)
+        loss[4] *= self.hyp.get("race", 1.0)
+        loss[5] *= self.hyp.get("body", 1.0)
+        return (fg_mask, target_gt_idx, target_bboxes, anchor_points, stride_tensor), loss, loss.detach()
+
+
 class v8SegmentationLoss(v8DetectionLoss):
     """Criterion class for computing training losses for YOLOv8 segmentation."""
 
