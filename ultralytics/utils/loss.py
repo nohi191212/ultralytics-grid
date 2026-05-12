@@ -551,7 +551,7 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 if not img_mask.any():
                     continue
                 gt_idx_i = target_gt_idx[i]  # (na,)
-                pos_i = gt_idx_i >= 0
+                pos_i = fg_mask[i]
                 if not pos_i.any():
                     continue
                 # Get instance attributes for this image

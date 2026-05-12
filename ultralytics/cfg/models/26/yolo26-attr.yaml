@@ -8,7 +8,7 @@
 nc: 1 # number of classes (person)
 ng: 2 # number of gender classes
 nr: 7 # number of race classes
-nb: 2 # number of body_type classes
+nb: 4 # number of body_type classes
 end2end: True # whether to use end-to-end mode
 reg_max: 1 # DFL bins
 scales: # model compound scaling constants, i.e. 'model=yolo26n.yaml' will call yolo26.yaml with scale 'n'
