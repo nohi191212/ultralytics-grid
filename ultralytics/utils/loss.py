@@ -485,9 +485,9 @@ class v8DetectionAttrLoss(v8DetectionLoss):
         head = model.model[-1]  # DetectAttr
         self.ng, self.nr, self.nb = head.ng, head.nr, head.nb
         self.no = head.no
-        self.ce_gender = nn.CrossEntropyLoss(reduction="none")
-        self.ce_race = nn.CrossEntropyLoss(reduction="none")
-        self.ce_body = nn.CrossEntropyLoss(reduction="none")
+        self.bce_gender = nn.BCEWithLogitsLoss(reduction="none")
+        self.bce_race = nn.BCEWithLogitsLoss(reduction="none")
+        self.bce_body = nn.BCEWithLogitsLoss(reduction="none")
 
     def get_assigned_targets_and_loss(self, preds, batch):
         loss = torch.zeros(6, device=self.device)  # box, cls, dfl, gender, race, body
@@ -535,26 +535,20 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 fg_mask, imgsz, stride_tensor,
             )
 
-        # Attribute loss — only on positive anchors
+        # Attribute loss — soft one-hot labels weighted by alignment scores (same paradigm as cls)
         if fg_mask.sum():
             pred_gender = preds["gender"].permute(0, 2, 1).contiguous()  # (bs, na, ng)
             pred_race = preds["race"].permute(0, 2, 1).contiguous()      # (bs, na, nr)
             pred_body = preds["body_type"].permute(0, 2, 1).contiguous() # (bs, na, nb)
 
-            na = pred_gender.shape[1]
-            gender_tgt = torch.full((batch_size, na), -1, dtype=torch.long, device=self.device)
-            race_tgt = torch.full((batch_size, na), -1, dtype=torch.long, device=self.device)
-            body_tgt = torch.full((batch_size, na), -1, dtype=torch.long, device=self.device)
+            gender_tgt = torch.zeros_like(pred_gender)
+            race_tgt = torch.zeros_like(pred_race)
+            body_tgt = torch.zeros_like(pred_body)
 
             for i in range(batch_size):
-                img_mask = batch["batch_idx"].view(-1) == i
-                if not img_mask.any():
-                    continue
-                gt_idx_i = target_gt_idx[i]  # (na,)
                 pos_i = fg_mask[i]
                 if not pos_i.any():
                     continue
-                # Get instance attributes for this image
                 idx_start = (batch["batch_idx"] == i).nonzero(as_tuple=True)[0]
                 if len(idx_start) == 0:
                     continue
@@ -562,20 +556,16 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 inst_gender = batch["gender"].view(-1)[start:end].long()
                 inst_race = batch["race"].view(-1)[start:end].long()
                 inst_body = batch["body_type"].view(-1)[start:end].long()
+                gt_idx_i = target_gt_idx[i]
                 indices = gt_idx_i[pos_i].long()
-                gender_tgt[i, pos_i] = inst_gender[indices]
-                race_tgt[i, pos_i] = inst_race[indices]
-                body_tgt[i, pos_i] = inst_body[indices]
+                pos_scores = target_scores[i, pos_i, 0]  # alignment scores as soft-label weights
+                gender_tgt[i, pos_i].scatter_(1, inst_gender[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
+                race_tgt[i, pos_i].scatter_(1, inst_race[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
+                body_tgt[i, pos_i].scatter_(1, inst_body[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
 
-            valid_mask = (gender_tgt >= 0) & (gender_tgt < self.ng)
-            if valid_mask.sum() > 0:
-                loss[3] = self.ce_gender(pred_gender[valid_mask], gender_tgt[valid_mask]).sum() / target_scores_sum
-            valid_mask = (race_tgt >= 0) & (race_tgt < self.nr)
-            if valid_mask.sum() > 0:
-                loss[4] = self.ce_race(pred_race[valid_mask], race_tgt[valid_mask]).sum() / target_scores_sum
-            valid_mask = (body_tgt >= 0) & (body_tgt < self.nb)
-            if valid_mask.sum() > 0:
-                loss[5] = self.ce_body(pred_body[valid_mask], body_tgt[valid_mask]).sum() / target_scores_sum
+            loss[3] = self.bce_gender(pred_gender, gender_tgt).sum() / target_scores_sum
+            loss[4] = self.bce_race(pred_race, race_tgt).sum() / target_scores_sum
+            loss[5] = self.bce_body(pred_body, body_tgt).sum() / target_scores_sum
 
         loss[0] *= self.hyp.box
         loss[1] *= self.hyp.cls

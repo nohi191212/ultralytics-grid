@@ -11,6 +11,7 @@ nr: 7 # number of race classes
 nb: 4 # number of body_type classes
 end2end: True # whether to use end-to-end mode
 reg_max: 1 # DFL bins
+scale: s  # model scale (must match pretrained weights)
 scales: # model compound scaling constants, i.e. 'model=yolo26n.yaml' will call yolo26.yaml with scale 'n'
   # [depth, width, max_channels]
   n: [0.50, 0.25, 1024] # summary: 260 layers, 2,572,280 parameters, 2,572,280 gradients, 6.1 GFLOPs

@@ -281,15 +281,32 @@ class DetectAttr(Detect):
         self.nb = nb
         self.no = nc + reg_max * 4 + ng + nr + nb
 
-        c4 = max(ch[0] // 4, max(ng, nr, nb))
+        c4 = max(ch[0], min(self.ng, 100))
+        c5 = max(ch[0], min(self.nr, 100))
+        c6 = max(ch[0], min(self.nb, 100))
         self.cv4 = nn.ModuleList(
-            nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.ng, 1)) for x in ch
+            nn.Sequential(
+                nn.Sequential(DWConv(x, x, 3), Conv(x, c4, 1)),
+                nn.Sequential(DWConv(c4, c4, 3), Conv(c4, c4, 1)),
+                nn.Conv2d(c4, self.ng, 1),
+            )
+            for x in ch
         )
         self.cv5 = nn.ModuleList(
-            nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nr, 1)) for x in ch
+            nn.Sequential(
+                nn.Sequential(DWConv(x, x, 3), Conv(x, c5, 1)),
+                nn.Sequential(DWConv(c5, c5, 3), Conv(c5, c5, 1)),
+                nn.Conv2d(c5, self.nr, 1),
+            )
+            for x in ch
         )
         self.cv6 = nn.ModuleList(
-            nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nb, 1)) for x in ch
+            nn.Sequential(
+                nn.Sequential(DWConv(x, x, 3), Conv(x, c6, 1)),
+                nn.Sequential(DWConv(c6, c6, 3), Conv(c6, c6, 1)),
+                nn.Conv2d(c6, self.nb, 1),
+            )
+            for x in ch
         )
         if end2end:
             self.one2one_cv4 = copy.deepcopy(self.cv4)
@@ -338,13 +355,13 @@ class DetectAttr(Detect):
 
     def bias_init(self):
         super().bias_init()
-        for cv in [self.cv4, self.cv5, self.cv6]:
-            for layer in cv:
-                layer[-1].bias.data.zero_()
+        for cv, n_attr in [(self.cv4, self.ng), (self.cv5, self.nr), (self.cv6, self.nb)]:
+            for i, layer in enumerate(cv):
+                layer[-1].bias.data[:] = math.log(5 / n_attr / (640 / self.stride[i]) ** 2)
         if self.end2end:
-            for cv in [self.one2one_cv4, self.one2one_cv5, self.one2one_cv6]:
-                for layer in cv:
-                    layer[-1].bias.data.zero_()
+            for cv, n_attr in [(self.one2one_cv4, self.ng), (self.one2one_cv5, self.nr), (self.one2one_cv6, self.nb)]:
+                for i, layer in enumerate(cv):
+                    layer[-1].bias.data[:] = math.log(5 / n_attr / (640 / self.stride[i]) ** 2)
 
     def fuse(self):
         self.cv2 = self.cv3 = self.cv4 = self.cv5 = self.cv6 = None
