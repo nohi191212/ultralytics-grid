@@ -559,6 +559,7 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 gt_idx_i = target_gt_idx[i]
                 indices = gt_idx_i[pos_i].long()
                 pos_scores = target_scores[i, pos_i, 0]  # alignment scores as soft-label weights
+                pos_scores = pos_scores.to(gender_tgt.dtype)  # 添加这行，确保 dtype 一致
                 gender_tgt[i, pos_i].scatter_(1, inst_gender[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
                 race_tgt[i, pos_i].scatter_(1, inst_race[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
                 body_tgt[i, pos_i].scatter_(1, inst_body[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
