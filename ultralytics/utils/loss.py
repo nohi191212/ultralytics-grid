@@ -559,18 +559,17 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 inst_body = batch["body_type"].view(-1)[start:end].long()
                 gt_idx_i = target_gt_idx[i]
                 indices = gt_idx_i[pos_i].long()
-                pos_scores = target_scores[i, pos_i, 0]  # alignment scores as soft-label weights
-
                 # Positive predictions for this image
                 p_g = pred_gender[i, pos_i]  # (N_pos, ng)
                 p_r = pred_race[i, pos_i]    # (N_pos, nr)
                 p_b = pred_body[i, pos_i]    # (N_pos, nb)
 
-                # One-hot targets scaled by alignment scores
+                # Soft one-hot targets weighted by alignment scores
+                pos_scores = target_scores[i, pos_i, 0]
+                pos_scores = pos_scores.to(p_g.dtype)
                 t_g = torch.zeros_like(p_g)
                 t_r = torch.zeros_like(p_r)
                 t_b = torch.zeros_like(p_b)
-                pos_scores = pos_scores.to(t_g.dtype)
                 t_g.scatter_(1, inst_gender[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
                 t_r.scatter_(1, inst_race[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
                 t_b.scatter_(1, inst_body[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
