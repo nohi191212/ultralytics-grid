@@ -535,15 +535,16 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 fg_mask, imgsz, stride_tensor,
             )
 
-        # Attribute loss — soft one-hot labels weighted by alignment scores (same paradigm as cls)
+        # Attribute loss — computed only on foreground (positive) anchors
         if fg_mask.sum():
             pred_gender = preds["gender"].permute(0, 2, 1).contiguous()  # (bs, na, ng)
             pred_race = preds["race"].permute(0, 2, 1).contiguous()      # (bs, na, nr)
             pred_body = preds["body_type"].permute(0, 2, 1).contiguous() # (bs, na, nb)
 
-            gender_tgt = torch.zeros_like(pred_gender)
-            race_tgt = torch.zeros_like(pred_race)
-            body_tgt = torch.zeros_like(pred_body)
+            # Collect positive-anchor predictions and targets across the batch
+            pos_pred_g, pos_tgt_g = [], []
+            pos_pred_r, pos_tgt_r = [], []
+            pos_pred_b, pos_tgt_b = [], []
 
             for i in range(batch_size):
                 pos_i = fg_mask[i]
@@ -559,14 +560,34 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 gt_idx_i = target_gt_idx[i]
                 indices = gt_idx_i[pos_i].long()
                 pos_scores = target_scores[i, pos_i, 0]  # alignment scores as soft-label weights
-                pos_scores = pos_scores.to(gender_tgt.dtype)  # 添加这行，确保 dtype 一致
-                gender_tgt[i, pos_i].scatter_(1, inst_gender[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
-                race_tgt[i, pos_i].scatter_(1, inst_race[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
-                body_tgt[i, pos_i].scatter_(1, inst_body[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
 
-            loss[3] = self.bce_gender(pred_gender, gender_tgt).sum() / target_scores_sum
-            loss[4] = self.bce_race(pred_race, race_tgt).sum() / target_scores_sum
-            loss[5] = self.bce_body(pred_body, body_tgt).sum() / target_scores_sum
+                # Positive predictions for this image
+                p_g = pred_gender[i, pos_i]  # (N_pos, ng)
+                p_r = pred_race[i, pos_i]    # (N_pos, nr)
+                p_b = pred_body[i, pos_i]    # (N_pos, nb)
+
+                # One-hot targets scaled by alignment scores
+                t_g = torch.zeros_like(p_g)
+                t_r = torch.zeros_like(p_r)
+                t_b = torch.zeros_like(p_b)
+                pos_scores = pos_scores.to(t_g.dtype)
+                t_g.scatter_(1, inst_gender[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
+                t_r.scatter_(1, inst_race[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
+                t_b.scatter_(1, inst_body[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
+
+                pos_pred_g.append(p_g)
+                pos_tgt_g.append(t_g)
+                pos_pred_r.append(p_r)
+                pos_tgt_r.append(t_r)
+                pos_pred_b.append(p_b)
+                pos_tgt_b.append(t_b)
+
+            if pos_pred_g:
+                loss[3] = self.bce_gender(torch.cat(pos_pred_g), torch.cat(pos_tgt_g)).sum() / target_scores_sum
+            if pos_pred_r:
+                loss[4] = self.bce_race(torch.cat(pos_pred_r), torch.cat(pos_tgt_r)).sum() / target_scores_sum
+            if pos_pred_b:
+                loss[5] = self.bce_body(torch.cat(pos_pred_b), torch.cat(pos_tgt_b)).sum() / target_scores_sum
 
         loss[0] *= self.hyp.box
         loss[1] *= self.hyp.cls
