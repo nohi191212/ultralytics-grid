@@ -44,6 +44,7 @@ class AttrDetectionValidator(DetectionValidator):
             end2end=self.end2end,
             rotated=False,
         )
+        # DetectAttr.postprocess output: [boxes(4), scores(1), conf(1), gender(ng), race(nr), body(nb)]
         return [{"bboxes": x[:, :4], "conf": x[:, 4], "cls": x[:, 5], "extra": x[:, 6:]} for x in outputs]
 
     def update_metrics(self, preds: list[dict[str, torch.Tensor]], batch: dict[str, Any]) -> None:

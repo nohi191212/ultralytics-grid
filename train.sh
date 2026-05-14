@@ -1,10 +1,6 @@
-/opt/conda/bin/python train_two_stage.py \
+python train_attr.py \
   --config ultralytics/cfg/models/26/yolo26s-attr.yaml \
-  --pretrained /mnt/dataset/OmniRobotFaceDetect/yolo26s-face.pt \
-  --data /mnt/dataset/OmniRobotFaceDetect/data.yaml \
-  --project /mnt/workspace/checkpoint/two_stage_0512 \
-  --device 0,1 \
-  --stage1-epochs 30 \
-  --stage2-epochs 70 \
-  --imgsz 640 \
-  --batch 32
+  --pretrained /mnt/HithinkOmniSSD/user_workspace/caisihang/project/人脸检测数据集/merged_yolo/yolo26s.pt \
+  --data /mnt/HithinkOmniSSD/user_workspace/caisihang/project/人脸检测数据集/hybrid_12k/data.yaml \
+  --project /mnt/HithinkOmniSSD/user_workspace/caisihang/project/ultralytics/runs/0514 \
+  --device 0,1 

@@ -23,6 +23,28 @@ from ultralytics.utils.torch_utils import TORCHVISION_0_10, TORCHVISION_0_11, TO
 
 DEFAULT_MEAN = (0.0, 0.0, 0.0)
 DEFAULT_STD = (1.0, 1.0, 1.0)
+ATTR_KEYS = ("gender", "race", "body_type")
+
+
+def _filter_attr_labels(labels: dict[str, Any], keep: np.ndarray | list[int]) -> None:
+    """Filter per-box attribute labels with the same indices used for boxes."""
+    for key in ATTR_KEYS:
+        if key in labels:
+            labels[key] = labels[key][keep]
+
+
+def _cat_attr_labels(labels: dict[str, Any], other: dict[str, Any], keep: np.ndarray | list[int] | None = None) -> None:
+    """Append per-box attribute labels from another sample."""
+    for key in ATTR_KEYS:
+        if key not in labels:
+            continue
+        other_values = other.get(key)
+        if other_values is None:
+            n = len(keep) if keep is not None else len(other.get("cls", []))
+            other_values = np.full((n, *labels[key].shape[1:]), -1, dtype=labels[key].dtype)
+        elif keep is not None:
+            other_values = other_values[keep]
+        labels[key] = np.concatenate((labels[key], other_values), axis=0)
 
 
 class BaseTransform:
@@ -883,6 +905,7 @@ class MixUp(BaseMixTransform):
         labels["img"] = (labels["img"] * r + labels2["img"] * (1 - r)).astype(np.uint8)
         labels["instances"] = Instances.concatenate([labels["instances"], labels2["instances"]], axis=0)
         labels["cls"] = np.concatenate([labels["cls"], labels2["cls"]], 0)
+        _cat_attr_labels(labels, labels2)
         return labels
 
 
@@ -996,6 +1019,7 @@ class CutMix(BaseMixTransform):
         instances2.add_padding(x1, y1)
 
         labels["cls"] = np.concatenate([labels["cls"], labels2["cls"][indexes2]], axis=0)
+        _cat_attr_labels(labels, labels2, indexes2)
         labels["instances"] = Instances.concatenate([labels["instances"], instances2], axis=0)
         return labels
 
@@ -1308,6 +1332,7 @@ class RandomPerspective:
         )
         labels["instances"] = new_instances[i]
         labels["cls"] = cls[i]
+        _filter_attr_labels(labels, i)
         labels["img"] = img
         labels["resized_shape"] = img.shape[:2]
         return labels
@@ -1769,10 +1794,14 @@ class CopyPaste(BaseMixTransform):
         n = len(indexes)
         sorted_idx = np.argsort(ioa.max(1)[indexes])
         indexes = indexes[sorted_idx]
+        copied = []
         for j in indexes[: round(self.p * n)]:
             cls = np.concatenate((cls, labels2.get("cls", cls)[[j]]), axis=0)
             instances = Instances.concatenate((instances, instances2[[j]]), axis=0)
             cv2.drawContours(im_new, instances2.segments[[j]].astype(np.int32), -1, 1, cv2.FILLED)
+            copied.append(j)
+        if copied:
+            _cat_attr_labels(labels1, labels2 or labels1, copied)
 
         result = labels2.get("img", cv2.flip(im, 1))  # augment segments
         if result.ndim == 2:  # cv2.flip would eliminate the last dimension for grayscale images
@@ -1896,7 +1925,7 @@ class Albumentations:
             # Compose transforms
             self.contains_spatial = any(transform.__class__.__name__ in spatial_transforms for transform in T)
             self.transform = (
-                A.Compose(T, bbox_params=A.BboxParams(format="yolo", label_fields=["class_labels"]))
+                A.Compose(T, bbox_params=A.BboxParams(format="yolo", label_fields=["class_labels", "attr_indices"]))
                 if self.contains_spatial
                 else A.Compose(T)
             )
@@ -1952,11 +1981,13 @@ class Albumentations:
                 labels["instances"].convert_bbox("xywh")
                 labels["instances"].normalize(*im.shape[:2][::-1])
                 bboxes = labels["instances"].bboxes
+                attr_indices = np.arange(len(cls))
                 # TODO: add supports of segments and keypoints
-                new = self.transform(image=im, bboxes=bboxes, class_labels=cls)  # transformed
+                new = self.transform(image=im, bboxes=bboxes, class_labels=cls, attr_indices=attr_indices)  # transformed
                 if len(new["class_labels"]) > 0:  # skip update if no bbox in new im
                     labels["img"] = new["image"]
                     labels["cls"] = np.array(new["class_labels"]).reshape(-1, 1)
+                    _filter_attr_labels(labels, np.array(new["attr_indices"], dtype=int))
                     bboxes = np.array(new["bboxes"], dtype=np.float32)
                 labels["instances"].update(bboxes=bboxes)
         else:
@@ -2070,6 +2101,11 @@ class Format:
         instances.convert_bbox(format=self.bbox_format)
         instances.denormalize(w, h)
         nl = len(instances)
+        for attr_name, attr in (("gender", gender), ("race", race), ("body_type", body_type)):
+            if attr is not None and len(attr) != nl:
+                raise ValueError(
+                    f"{attr_name} labels must match boxes after augmentation, got {len(attr)} attrs and {nl} boxes."
+                )
 
         if self.return_mask:
             if nl:
@@ -2382,6 +2418,7 @@ class RandomLoadText:
             new_cls.append([label2ids[label]])
         labels["instances"] = labels["instances"][valid_idx]
         labels["cls"] = np.array(new_cls)
+        _filter_attr_labels(labels, valid_idx)
 
         # Randomly select one prompt when there's more than one prompts
         texts = []

@@ -485,9 +485,9 @@ class v8DetectionAttrLoss(v8DetectionLoss):
         head = model.model[-1]  # DetectAttr
         self.ng, self.nr, self.nb = head.ng, head.nr, head.nb
         self.no = head.no
-        self.bce_gender = nn.BCEWithLogitsLoss(reduction="none")
-        self.bce_race = nn.BCEWithLogitsLoss(reduction="none")
-        self.bce_body = nn.BCEWithLogitsLoss(reduction="none")
+        self.ce_gender = nn.CrossEntropyLoss(reduction="none")
+        self.ce_race = nn.CrossEntropyLoss(reduction="none")
+        self.ce_body = nn.CrossEntropyLoss(reduction="none")
 
     def get_assigned_targets_and_loss(self, preds, batch):
         loss = torch.zeros(6, device=self.device)  # box, cls, dfl, gender, race, body
@@ -564,42 +564,45 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 p_r = pred_race[i, pos_i]    # (N_pos, nr)
                 p_b = pred_body[i, pos_i]    # (N_pos, nb)
 
-                # Hard one-hot targets for attributes — alignment scores used as sample weights, not label values
-                t_g = torch.zeros_like(p_g)
-                t_r = torch.zeros_like(p_r)
-                t_b = torch.zeros_like(p_b)
-                t_g.scatter_(1, inst_gender[indices].unsqueeze(-1), 1.0)
-                t_r.scatter_(1, inst_race[indices].unsqueeze(-1), 1.0)
-                t_b.scatter_(1, inst_body[indices].unsqueeze(-1), 1.0)
-
                 # Alignment scores as per-anchor sample weights
                 pos_scores = target_scores[i, pos_i, 0].to(p_g.dtype)
 
-                pos_pred_g.append(p_g)
-                pos_tgt_g.append(t_g)
-                pos_wgt_g.append(pos_scores)
-                pos_pred_r.append(p_r)
-                pos_tgt_r.append(t_r)
-                pos_wgt_r.append(pos_scores)
-                pos_pred_b.append(p_b)
-                pos_tgt_b.append(t_b)
-                pos_wgt_b.append(pos_scores)
+                t_g = inst_gender[indices]
+                t_r = inst_race[indices]
+                t_b = inst_body[indices]
+
+                valid_g = (t_g >= 0) & (t_g < self.ng)
+                valid_r = (t_r >= 0) & (t_r < self.nr)
+                valid_b = (t_b >= 0) & (t_b < self.nb)
+
+                if valid_g.any():
+                    pos_pred_g.append(p_g[valid_g])
+                    pos_tgt_g.append(t_g[valid_g])
+                    pos_wgt_g.append(pos_scores[valid_g])
+                if valid_r.any():
+                    pos_pred_r.append(p_r[valid_r])
+                    pos_tgt_r.append(t_r[valid_r])
+                    pos_wgt_r.append(pos_scores[valid_r])
+                if valid_b.any():
+                    pos_pred_b.append(p_b[valid_b])
+                    pos_tgt_b.append(t_b[valid_b])
+                    pos_wgt_b.append(pos_scores[valid_b])
 
             if pos_pred_g:
                 pred_g = torch.cat(pos_pred_g)
                 tgt_g = torch.cat(pos_tgt_g)
                 w_g = torch.cat(pos_wgt_g)
-                loss[3] = (self.bce_gender(pred_g, tgt_g).mean(1) * w_g).sum() / target_scores_sum
+                loss[3] = (self.ce_gender(pred_g, tgt_g) * w_g).sum() / w_g.sum().clamp_min(1.0)
             if pos_pred_r:
                 pred_r = torch.cat(pos_pred_r)
                 tgt_r = torch.cat(pos_tgt_r)
                 w_r = torch.cat(pos_wgt_r)
-                loss[4] = (self.bce_race(pred_r, tgt_r).mean(1) * w_r).sum() / target_scores_sum
+                loss[4] = (self.ce_race(pred_r, tgt_r) * w_r).sum() / w_r.sum().clamp_min(1.0)
             if pos_pred_b:
                 pred_b = torch.cat(pos_pred_b)
                 tgt_b = torch.cat(pos_tgt_b)
                 w_b = torch.cat(pos_wgt_b)
-                loss[5] = (self.bce_body(pred_b, tgt_b).mean(1) * w_b).sum() / target_scores_sum
+                loss[5] = (self.ce_body(pred_b, tgt_b) * w_b).sum() / w_b.sum().clamp_min(1.0)
 
         loss[0] *= self.hyp.box
         loss[1] *= self.hyp.cls

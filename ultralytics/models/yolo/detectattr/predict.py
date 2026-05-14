@@ -67,6 +67,8 @@ class AttrDetectionPredictor(BasePredictor):
         for pred, orig_img, img_path in zip(preds, orig_imgs, self.batch[0]):
             pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
             if len(pred):
+                # DetectAttr.postprocess output: [boxes(4), scores(1), conf(1), gender(ng), race(nr), body(nb)]
+                # attr logits start at column 6 (skip boxes + scores + conf = 4+1+1=6)
                 extra = pred[:, 6:]
                 gender_logits = extra[:, :ng]
                 race_logits = extra[:, ng:ng + nr]
@@ -79,7 +81,7 @@ class AttrDetectionPredictor(BasePredictor):
                         orig_img=orig_img,
                         path=img_path,
                         names=self.model.names,
-                        boxes=pred[:, :6],
+                        boxes=pred[:, :6],  # xyxy(4) + scores(1) + conf(1)
                         gender=gender,
                         race=race,
                         body_type=body_type,
