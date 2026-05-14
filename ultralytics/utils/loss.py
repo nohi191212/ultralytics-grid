@@ -541,10 +541,10 @@ class v8DetectionAttrLoss(v8DetectionLoss):
             pred_race = preds["race"].permute(0, 2, 1).contiguous()      # (bs, na, nr)
             pred_body = preds["body_type"].permute(0, 2, 1).contiguous() # (bs, na, nb)
 
-            # Collect positive-anchor predictions and targets across the batch
-            pos_pred_g, pos_tgt_g = [], []
-            pos_pred_r, pos_tgt_r = [], []
-            pos_pred_b, pos_tgt_b = [], []
+            # Collect positive-anchor predictions, hard targets, and sample weights
+            pos_pred_g, pos_tgt_g, pos_wgt_g = [], [], []
+            pos_pred_r, pos_tgt_r, pos_wgt_r = [], [], []
+            pos_pred_b, pos_tgt_b, pos_wgt_b = [], [], []
 
             for i in range(batch_size):
                 pos_i = fg_mask[i]
@@ -564,29 +564,42 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 p_r = pred_race[i, pos_i]    # (N_pos, nr)
                 p_b = pred_body[i, pos_i]    # (N_pos, nb)
 
-                # Soft one-hot targets weighted by alignment scores
-                pos_scores = target_scores[i, pos_i, 0]
-                pos_scores = pos_scores.to(p_g.dtype)
+                # Hard one-hot targets for attributes — alignment scores used as sample weights, not label values
                 t_g = torch.zeros_like(p_g)
                 t_r = torch.zeros_like(p_r)
                 t_b = torch.zeros_like(p_b)
-                t_g.scatter_(1, inst_gender[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
-                t_r.scatter_(1, inst_race[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
-                t_b.scatter_(1, inst_body[indices].unsqueeze(-1), pos_scores.unsqueeze(-1))
+                t_g.scatter_(1, inst_gender[indices].unsqueeze(-1), 1.0)
+                t_r.scatter_(1, inst_race[indices].unsqueeze(-1), 1.0)
+                t_b.scatter_(1, inst_body[indices].unsqueeze(-1), 1.0)
+
+                # Alignment scores as per-anchor sample weights
+                pos_scores = target_scores[i, pos_i, 0].to(p_g.dtype)
 
                 pos_pred_g.append(p_g)
                 pos_tgt_g.append(t_g)
+                pos_wgt_g.append(pos_scores)
                 pos_pred_r.append(p_r)
                 pos_tgt_r.append(t_r)
+                pos_wgt_r.append(pos_scores)
                 pos_pred_b.append(p_b)
                 pos_tgt_b.append(t_b)
+                pos_wgt_b.append(pos_scores)
 
             if pos_pred_g:
-                loss[3] = self.bce_gender(torch.cat(pos_pred_g), torch.cat(pos_tgt_g)).sum() / target_scores_sum
+                pred_g = torch.cat(pos_pred_g)
+                tgt_g = torch.cat(pos_tgt_g)
+                w_g = torch.cat(pos_wgt_g)
+                loss[3] = (self.bce_gender(pred_g, tgt_g).mean(1) * w_g).sum() / target_scores_sum
             if pos_pred_r:
-                loss[4] = self.bce_race(torch.cat(pos_pred_r), torch.cat(pos_tgt_r)).sum() / target_scores_sum
+                pred_r = torch.cat(pos_pred_r)
+                tgt_r = torch.cat(pos_tgt_r)
+                w_r = torch.cat(pos_wgt_r)
+                loss[4] = (self.bce_race(pred_r, tgt_r).mean(1) * w_r).sum() / target_scores_sum
             if pos_pred_b:
-                loss[5] = self.bce_body(torch.cat(pos_pred_b), torch.cat(pos_tgt_b)).sum() / target_scores_sum
+                pred_b = torch.cat(pos_pred_b)
+                tgt_b = torch.cat(pos_tgt_b)
+                w_b = torch.cat(pos_wgt_b)
+                loss[5] = (self.bce_body(pred_b, tgt_b).mean(1) * w_b).sum() / target_scores_sum
 
         loss[0] *= self.hyp.box
         loss[1] *= self.hyp.cls
