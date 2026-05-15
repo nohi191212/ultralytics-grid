@@ -41,8 +41,7 @@ DATA = args.data
 PROJECT = args.project  # 输出目录
 
 # ========== 训练 ==========
-model = YOLO(MODEL_CFG, task="detectattr")
-model.load(PRETRAINED)  # 加载预训练 backbone + detect head
+model = YOLO(PRETRAINED, task="detectattr")
 
 print(f"Number of GPUs: {gpu_count}, batch size: {BATCH_SIZE}")
 
@@ -56,6 +55,7 @@ results = model.train(
     project=PROJECT,
     name="exp",
     exist_ok=True,
+    resume=True,
 )
 
 # ========== 评估 ==========
