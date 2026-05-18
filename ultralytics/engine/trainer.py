@@ -857,7 +857,19 @@ class BaseTrainer:
             try:
                 exists = isinstance(resume, (str, Path)) and Path(resume).exists()
                 last = Path(check_file(resume) if exists else get_latest_run())
-                ckpt_args = load_checkpoint(last)[0].args
+                ckpt_model, ckpt = load_checkpoint(last)
+                ckpt_args = ckpt_model.args
+                ckpt_optimizer = ckpt.get("optimizer") or {}
+                ckpt_param_groups = ckpt_optimizer.get("param_groups", [])
+                ckpt_uses_muon = any(g.get("use_muon") for g in ckpt_param_groups)
+                override_optimizer = overrides.get("optimizer")
+                forced_optimizer = None
+                if ckpt_args.get("optimizer") == "auto" and ckpt_uses_muon and override_optimizer in {None, "auto"}:
+                    LOGGER.info("Resume checkpoint was trained with MuSGD; using optimizer=MuSGD instead of auto.")
+                    ckpt_args["optimizer"] = "MuSGD"
+                    forced_optimizer = "MuSGD"
+                elif override_optimizer is not None:
+                    ckpt_args["optimizer"] = override_optimizer
                 if not isinstance(ckpt_args["data"], dict) and not Path(ckpt_args["data"]).exists():
                     ckpt_args["data"] = self.args.data
 
@@ -880,6 +892,7 @@ class BaseTrainer:
                     "save_period",
                     "workers",
                     "cache",
+                    "optimizer",
                     "patience",
                     "time",
                     "freeze",
@@ -887,6 +900,8 @@ class BaseTrainer:
                     "plots",
                 ):  # allow arg updates to reduce memory or update device on resume
                     if k in overrides:
+                        if k == "optimizer" and forced_optimizer and overrides[k] == "auto":
+                            continue
                         setattr(self.args, k, overrides[k])
                 if "save_dir" not in overrides and ("project" in overrides or "name" in overrides):
                     self.args.save_dir = None
@@ -910,9 +925,19 @@ class BaseTrainer:
 
     def _load_checkpoint_state(self, ckpt):
         """Load optimizer, scaler, EMA, and best_fitness from checkpoint."""
+        optimizer_loaded = False
         if ckpt.get("optimizer") is not None:
-            self.optimizer.load_state_dict(ckpt["optimizer"])
-        if ckpt.get("scaler") is not None:
+            try:
+                self.optimizer.load_state_dict(ckpt["optimizer"])
+                optimizer_loaded = True
+            except ValueError as e:
+                ckpt_groups = len(ckpt["optimizer"].get("param_groups", []))
+                current_groups = len(self.optimizer.param_groups)
+                LOGGER.warning(
+                    "Skipping optimizer state resume because parameter groups do not match "
+                    f"(checkpoint={ckpt_groups}, current={current_groups}): {e}"
+                )
+        if optimizer_loaded and ckpt.get("scaler") is not None:
             self.scaler.load_state_dict(ckpt["scaler"])
         if self.ema and ckpt.get("ema"):
             self.ema = ModelEMA(self.model)  # validation with EMA creates inference tensors that can't be updated
