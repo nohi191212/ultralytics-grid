@@ -10,10 +10,12 @@ from ultralytics import YOLO
 argparser = argparse.ArgumentParser()
 
 argparser.add_argument('--config', required=True)
-argparser.add_argument('--pretrained', default=None)
+argparser.add_argument('--pretrained', default=None, help='Checkpoint path to resume from, usually weights/last.pt')
 argparser.add_argument('--data', required=True)
 argparser.add_argument('--project', required=True)
 argparser.add_argument('--device', required=True)
+argparser.add_argument('--epochs', type=int, default=100)
+argparser.add_argument('--name', default='exp')
 
 args = argparser.parse_args()
 
@@ -39,27 +41,31 @@ MODEL_CFG = args.config  # 模型结构
 PRETRAINED = args.pretrained  # 预训练权重
 DATA = args.data
 PROJECT = args.project  # 输出目录
+EPOCHS = args.epochs
+NAME = args.name
 
 # ========== 训练 ==========
 model = YOLO(PRETRAINED, task="detectattr")
 
 print(f"Number of GPUs: {gpu_count}, batch size: {BATCH_SIZE}")
+print(f"Resuming from: {PRETRAINED}")
+print(f"Saving to: {PROJECT}/{NAME}")
 
 results = model.train(
     data=DATA,
-    epochs=100,
+    epochs=EPOCHS,
     imgsz=640,
     batch=BATCH_SIZE,
     device=DEVICE,  # GPU; CPU 设为 "cpu"
     workers=workers,
     project=PROJECT,
-    name="exp",
+    name=NAME,
     exist_ok=True,
-    resume=True,
+    resume=PRETRAINED,
 )
 
 # ========== 评估 ==========
-best = Path(PROJECT) / "exp" / "weights" / "best.pt"
+best = Path(PROJECT) / NAME / "weights" / "best.pt"
 model2 = YOLO(str(best))
 metrics = model2.val(data=DATA, imgsz=640)
 print("Validation metrics:", metrics)
