@@ -7,10 +7,11 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.distributed as dist
 
 from ultralytics.data import build_dataloader, build_yolo_dataset
 from ultralytics.models.yolo.detect import DetectionValidator
-from ultralytics.utils import LOGGER, nms
+from ultralytics.utils import LOGGER, RANK, nms
 from ultralytics.utils.metrics import box_iou
 
 
@@ -192,6 +193,29 @@ class AttrDetectionValidator(DetectionValidator):
                 + 0.4 * attr_acc_avg
             )
         return results
+
+    def gather_stats(self) -> None:
+        """Gather detection and attribute statistics from all validation ranks."""
+        super().gather_stats()
+        if RANK == -1 or not dist.is_available() or not dist.is_initialized():
+            return
+
+        attr_stats = torch.tensor(
+            [
+                self.attr_correct["gender"],
+                self.attr_correct["race"],
+                self.attr_correct["body_type"],
+                self.attr_total,
+            ],
+            device=self.device,
+            dtype=torch.float64,
+        )
+        dist.reduce(attr_stats, dst=0, op=dist.ReduceOp.SUM)
+        if RANK == 0:
+            self.attr_correct["gender"] = int(attr_stats[0].item())
+            self.attr_correct["race"] = int(attr_stats[1].item())
+            self.attr_correct["body_type"] = int(attr_stats[2].item())
+            self.attr_total = int(attr_stats[3].item())
 
     def print_results(self) -> None:
         """Print detection and attribute accuracy metrics."""

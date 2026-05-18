@@ -864,10 +864,17 @@ class BaseTrainer:
                 resume = True
                 self.args = get_cfg(ckpt_args)
                 self.args.model = self.args.resume = str(last)  # reinstate model
+                self.args.pretrained = True  # keep resume weights; do not reload the original pretraining source
                 for k in (
+                    "data",
+                    "epochs",
                     "imgsz",
                     "batch",
                     "device",
+                    "project",
+                    "name",
+                    "exist_ok",
+                    "save_dir",
                     "close_mosaic",
                     "augmentations",
                     "save_period",
@@ -881,6 +888,8 @@ class BaseTrainer:
                 ):  # allow arg updates to reduce memory or update device on resume
                     if k in overrides:
                         setattr(self.args, k, overrides[k])
+                if "save_dir" not in overrides and ("project" in overrides or "name" in overrides):
+                    self.args.save_dir = None
 
                 # Handle augmentations parameter for resume: check if user provided custom augmentations
                 if ckpt_args.get("augmentations") is not None:
