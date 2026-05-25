@@ -54,7 +54,7 @@ def move_file_to_checkpoint(source_path, checkpoint_dir="/mnt/workspace/checkpoi
         print(f"目标文件已存在，重命名为: {filename}")
     
     # 移动文件
-    shutil.move(source_path, dest_path)
+    shutil.copy(source_path, dest_path)
     print(f"文件已成功移动: {source_path} -> {dest_path}")
     
     return dest_path
