@@ -67,8 +67,9 @@ class RegressionValidator(BaseValidator):
     def print_results(self):
         stats = self.get_stats()
         LOGGER.info(
-            "Height regression — mae_m: %.4f  rmse_m: %.4f  over_2m_acc: %.4f"
-            % (stats["metrics/mae_m"], stats["metrics/rmse_m"], stats["metrics/height_over_2m_acc"])
+            "Height regression — mae_m: {:.4f}  rmse_m: {:.4f}  over_2m_acc: {:.4f}".format(
+                stats["metrics/mae_m"], stats["metrics/rmse_m"], stats["metrics/height_over_2m_acc"]
+            )
         )
 
     def build_dataset(self, img_path, mode="val", batch=None):
