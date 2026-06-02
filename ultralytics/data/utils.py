@@ -195,7 +195,11 @@ def verify_image(args: tuple) -> tuple:
 
 def verify_image_label(args: tuple) -> list:
     """Verify one image-label pair."""
-    im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, single_cls = args
+    if len(args) == 8:
+        im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, single_cls = args
+        num_attrs = 0
+    else:
+        im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, single_cls, num_attrs = args
     # Number (missing, found, empty, corrupt), message, segments, keypoints
     nm, nf, ne, nc, msg, segments, keypoints, attrs = 0, 0, 0, 0, "", [], None, None
     try:
@@ -218,7 +222,10 @@ def verify_image_label(args: tuple) -> list:
             nf = 1  # label found
             with open(lb_file, encoding="utf-8") as f:
                 lb = [x.split() for x in f.read().strip().splitlines() if len(x)]
-                if not keypoint and lb and all(len(x) == 8 for x in lb):  # attribute format: cls x y w h gender race body_type
+                attr_cols = 5 + int(num_attrs)
+                if not keypoint and lb and num_attrs and all(len(x) == attr_cols for x in lb):
+                    lb = np.array(lb, dtype=np.float32)
+                elif not keypoint and lb and all(len(x) == 8 for x in lb):  # legacy: cls x y w h gender race body_type
                     lb = np.array(lb, dtype=np.float32)
                 elif any(len(x) > 6 for x in lb) and (not keypoint):  # is segment
                     classes = np.array([x[0] for x in lb], dtype=np.float32)
@@ -231,11 +238,14 @@ def verify_image_label(args: tuple) -> list:
                     assert lb.shape[1] == (5 + nkpt * ndim), f"labels require {(5 + nkpt * ndim)} columns each"
                     points = lb[:, 5:].reshape(-1, ndim)[:, :2]
                 else:
-                    assert lb.shape[1] in (5, 8), f"labels require 5 or 8 columns, {lb.shape[1]} columns detected"
+                    valid_cols = (5, 8) if not num_attrs else (5, 8, 5 + int(num_attrs))
+                    assert lb.shape[1] in valid_cols, f"labels require one of {valid_cols} columns, {lb.shape[1]} detected"
                     points = lb[:, 1:5]  # xywh only (columns 1-4)
                 # Coordinate points check with 1% tolerance
                 assert points.max() <= 1.01, f"non-normalized or out of bounds coordinates {points[points > 1.01]}"
-                assert lb.min() >= -0.01, f"negative class labels or coordinate {lb[lb < -0.01]}"
+                assert lb[:, :5].min() >= -0.01, f"negative class labels or coordinate {lb[:, :5][lb[:, :5] < -0.01]}"
+                if lb.shape[1] > 5:
+                    assert lb[:, 5:].min() >= -1.01, f"attribute labels below -1 detected {lb[:, 5:][lb[:, 5:] < -1.01]}"
 
                 # All labels — max cls check uses column 0 only
                 max_cls = 0 if single_cls else lb[:, 0].max()  # max label count
@@ -250,7 +260,7 @@ def verify_image_label(args: tuple) -> list:
                         segments = [segments[x] for x in i]
                     msg = f"{prefix}{im_file}: {nl - len(i)} duplicate labels removed"
                 # Extract attributes after dedup
-                if lb.shape[1] == 8:
+                if lb.shape[1] > 5:
                     attrs = lb[:, 5:].astype(np.int64)
                     lb = lb[:, :5]
             else:
@@ -266,7 +276,7 @@ def verify_image_label(args: tuple) -> list:
                 keypoints = np.concatenate([keypoints, kpt_mask[..., None]], axis=-1)  # (nl, nkpt, 3)
         lb = lb[:, :5]
         if attrs is None:
-            attrs = np.full((len(lb), 3), -1, dtype=np.int64)
+            attrs = np.full((len(lb), int(num_attrs) if num_attrs else 3), -1, dtype=np.int64)
         return im_file, lb, shape, segments, keypoints, attrs, nm, nf, ne, nc, msg
     except Exception as e:
         nc = 1

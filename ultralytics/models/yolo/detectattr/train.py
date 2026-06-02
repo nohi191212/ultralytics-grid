@@ -22,7 +22,7 @@ class AttrDetectionTrainer(BaseTrainer):
 
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None):
         super().__init__(cfg, overrides, _callbacks)
-        self.loss_names = "box_loss", "cls_loss", "dfl_loss", "gender_loss", "race_loss", "body_loss"
+        self.loss_names = "box_loss", "cls_loss", "dfl_loss"
 
     def get_model(self, cfg=None, weights=None, verbose=True):
         model = AttrDetectionModel(cfg, nc=self.data["nc"], verbose=verbose and RANK == -1)
@@ -31,7 +31,8 @@ class AttrDetectionTrainer(BaseTrainer):
         return model
 
     def get_validator(self):
-        self.loss_names = "box_loss", "cls_loss", "dfl_loss", "gender_loss", "race_loss", "body_loss"
+        attr_names = self.data.get("attr_names") or [x["name"] for x in self.data.get("attrs", [])]
+        self.loss_names = ("box_loss", "cls_loss", "dfl_loss", *[f"{x}_loss" for x in attr_names])
         return yolo.detectattr.AttrDetectionValidator(
             self.test_loader, save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks
         )
@@ -39,6 +40,13 @@ class AttrDetectionTrainer(BaseTrainer):
     def set_model_attributes(self):
         self.model.nc = self.data["nc"]
         self.model.names = self.data["names"]
+        attrs = self.data.get("attrs") or []
+        if attrs:
+            self.model.attr_names = [x["name"] for x in attrs]
+            self.model.attr_dims = [len(x.get("classes", [])) for x in attrs]
+            self.model.attr_class_names = {
+                x["name"]: {i: str(name) for i, name in enumerate(x.get("classes", []))} for x in attrs
+            }
         self.model.gender_names = self.data.get("gender_names", self.model.gender_names)
         self.model.race_names = self.data.get("race_names", self.model.race_names)
         self.model.body_names = self.data.get("body_names", self.model.body_names)
@@ -63,8 +71,9 @@ class AttrDetectionTrainer(BaseTrainer):
 
     def preprocess_batch(self, batch):
         batch["img"] = batch["img"].to(self.device, non_blocking=True).float() / 255
-        for k in {"batch_idx", "cls", "bboxes", "gender", "race", "body_type"}:
-            batch[k] = batch[k].to(self.device)
+        for k in {"batch_idx", "cls", "bboxes", "attrs", "gender", "race", "body_type"}:
+            if k in batch:
+                batch[k] = batch[k].to(self.device)
         return batch
 
     def progress_string(self):

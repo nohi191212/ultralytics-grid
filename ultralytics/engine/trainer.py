@@ -618,11 +618,19 @@ class BaseTrainer:
             torch.cuda.empty_cache()
 
     def read_results_csv(self):
-        """Read results.csv into a dictionary using polars."""
-        import polars as pl  # scope for faster 'import ultralytics'
-
+        """Read results.csv into a dictionary."""
         try:
+            import polars as pl  # scope for faster 'import ultralytics'
+
             return pl.read_csv(self.csv, infer_schema_length=None).to_dict(as_series=False)
+        except ModuleNotFoundError:
+            import csv
+
+            if not self.csv.exists():
+                return {}
+            with open(self.csv, newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+            return {k: [row.get(k) for row in rows] for k in rows[0]} if rows else {}
         except Exception:
             return {}
 
@@ -693,11 +701,20 @@ class BaseTrainer:
             # Task-specific dataset checking
             if self.args.task == "classify":
                 data = check_cls_dataset(self.args.data)
+            elif self.args.task == "regress":
+                data = YAML.load(self.args.data)
+                data["path"] = str(Path(self.args.data).parent if "path" not in data else Path(data["path"]))
+                data.setdefault("train", data.get("images", "images/{split}").format(split="train"))
+                data.setdefault("val", data.get("images", "images/{split}").format(split="val"))
+                data.setdefault("names", {0: "height"})
+                data.setdefault("nc", 1)
+                data.setdefault("channels", 3)
             elif str(self.args.data).rsplit(".", 1)[-1] in {"yaml", "yml"} or self.args.task in {
                 "detect",
                 "segment",
                 "pose",
                 "obb",
+                "detectattr",
             }:
                 data = check_det_dataset(self.args.data)
                 if "yaml_file" in data:

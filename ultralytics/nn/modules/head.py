@@ -20,7 +20,19 @@ from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "DetectAttr", "OBB", "Classify", "Detect", "Pose", "RTDETRDecoder", "Segment", "YOLOEDetect", "YOLOESegment", "v10Detect"
+__all__ = (
+    "DetectAttr",
+    "OBB",
+    "Classify",
+    "Detect",
+    "Pose",
+    "Regress",
+    "RTDETRDecoder",
+    "Segment",
+    "YOLOEDetect",
+    "YOLOESegment",
+    "v10Detect",
+)
 
 
 class Detect(nn.Module):
@@ -252,119 +264,107 @@ class Detect(nn.Module):
 
 
 class DetectAttr(Detect):
-    """YOLO DetectAttr head for detection + attribute prediction models.
+    """YOLO detection head with a configurable set of per-box attribute classifiers."""
 
-    This class extends the Detect head to include gender, race, and body_type attribute predictions alongside
-    bounding boxes and class probabilities.
+    def __init__(self, nc=80, *args):
+        """Initialize DetectAttr.
 
-    Attributes:
-        ng (int): Number of gender classes.
-        nr (int): Number of race classes.
-        nb (int): Number of body_type classes.
-        cv4 (nn.ModuleList): Convolution layers for gender prediction.
-        cv5 (nn.ModuleList): Convolution layers for race prediction.
-        cv6 (nn.ModuleList): Convolution layers for body_type prediction.
-        one2one_cv4/cv5/cv6 (nn.ModuleList): One-to-one copies for end-to-end training.
+        Supports the new form ``DetectAttr(nc, attr_dims, reg_max, end2end, ch)`` and the legacy
+        ``DetectAttr(nc, ng, nr, nb, reg_max, end2end, ch)`` form used by the earlier face-attribute model.
+        """
+        if args and isinstance(args[0], (list, tuple)):
+            attr_dims = [int(x) for x in args[0]]
+            reg_max = args[1] if len(args) > 1 else 1
+            end2end = args[2] if len(args) > 2 else True
+            ch = args[3] if len(args) > 3 else ()
+        else:
+            ng = int(args[0]) if len(args) > 0 else 2
+            nr = int(args[1]) if len(args) > 1 else 7
+            nb = int(args[2]) if len(args) > 2 else 2
+            attr_dims = [ng, nr, nb]
+            reg_max = args[3] if len(args) > 3 else 1
+            end2end = args[4] if len(args) > 4 else True
+            ch = args[5] if len(args) > 5 else ()
 
-    Methods:
-        forward_head: Return model outputs including attribute logits.
-        _inference: Decode and concatenate attribute predictions.
-        postprocess: Post-process predictions including attributes.
-        bias_init: Initialize attribute head biases.
-        fuse: Remove one2many heads for inference.
-    """
-
-    def __init__(self, nc=80, ng=2, nr=7, nb=2, reg_max=1, end2end=True, ch=()):
         super().__init__(nc, reg_max, end2end, ch)
-        self.ng = ng
-        self.nr = nr
-        self.nb = nb
-        self.no = nc + reg_max * 4 + ng + nr + nb
+        self.attr_dims = attr_dims
+        self.na = len(attr_dims)
+        self.no = nc + reg_max * 4 + sum(attr_dims)
+        self.ng = attr_dims[0] if len(attr_dims) > 0 else 0
+        self.nr = attr_dims[1] if len(attr_dims) > 1 else 0
+        self.nb = attr_dims[2] if len(attr_dims) > 2 else 0
 
-        c4 = max(ch[0], min(self.ng, 100))
-        c5 = max(ch[0], min(self.nr, 100))
-        c6 = max(ch[0], min(self.nb, 100))
-        self.cv4 = nn.ModuleList(
-            nn.Sequential(
-                nn.Sequential(DWConv(x, x, 3), Conv(x, c4, 1)),
-                nn.Sequential(DWConv(c4, c4, 3), Conv(c4, c4, 1)),
-                nn.Conv2d(c4, self.ng, 1),
+        def make_attr_head(dim: int) -> nn.ModuleList:
+            c = max(ch[0], min(dim, 100))
+            return nn.ModuleList(
+                nn.Sequential(
+                    nn.Sequential(DWConv(x, x, 3), Conv(x, c, 1)),
+                    nn.Sequential(DWConv(c, c, 3), Conv(c, c, 1)),
+                    nn.Conv2d(c, dim, 1),
+                )
+                for x in ch
             )
-            for x in ch
-        )
-        self.cv5 = nn.ModuleList(
-            nn.Sequential(
-                nn.Sequential(DWConv(x, x, 3), Conv(x, c5, 1)),
-                nn.Sequential(DWConv(c5, c5, 3), Conv(c5, c5, 1)),
-                nn.Conv2d(c5, self.nr, 1),
-            )
-            for x in ch
-        )
-        self.cv6 = nn.ModuleList(
-            nn.Sequential(
-                nn.Sequential(DWConv(x, x, 3), Conv(x, c6, 1)),
-                nn.Sequential(DWConv(c6, c6, 3), Conv(c6, c6, 1)),
-                nn.Conv2d(c6, self.nb, 1),
-            )
-            for x in ch
-        )
+
+        self.cv_attrs = nn.ModuleList(make_attr_head(dim) for dim in self.attr_dims)
+        if self.na > 0:
+            self.cv4 = self.cv_attrs[0]
+        if self.na > 1:
+            self.cv5 = self.cv_attrs[1]
+        if self.na > 2:
+            self.cv6 = self.cv_attrs[2]
         if end2end:
-            self.one2one_cv4 = copy.deepcopy(self.cv4)
-            self.one2one_cv5 = copy.deepcopy(self.cv5)
-            self.one2one_cv6 = copy.deepcopy(self.cv6)
+            self.one2one_cv_attrs = copy.deepcopy(self.cv_attrs)
+            if self.na > 0:
+                self.one2one_cv4 = self.one2one_cv_attrs[0]
+            if self.na > 1:
+                self.one2one_cv5 = self.one2one_cv_attrs[1]
+            if self.na > 2:
+                self.one2one_cv6 = self.one2one_cv_attrs[2]
 
     @property
     def one2many(self):
-        return dict(box_head=self.cv2, cls_head=self.cv3,
-                    gender_head=self.cv4, race_head=self.cv5, body_head=self.cv6)
+        return dict(box_head=self.cv2, cls_head=self.cv3, attrs_head=self.cv_attrs)
 
     @property
     def one2one(self):
-        return dict(box_head=self.one2one_cv2, cls_head=self.one2one_cv3,
-                    gender_head=self.one2one_cv4, race_head=self.one2one_cv5, body_head=self.one2one_cv6)
+        return dict(box_head=self.one2one_cv2, cls_head=self.one2one_cv3, attrs_head=self.one2one_cv_attrs)
 
-    def forward_head(self, x, box_head=None, cls_head=None, gender_head=None, race_head=None, body_head=None):
+    def forward_head(self, x, box_head=None, cls_head=None, attrs_head=None):
         preds = super().forward_head(x, box_head, cls_head)
-        if gender_head is not None:
+        if attrs_head is not None:
             bs = x[0].shape[0]
-            preds["gender"] = torch.cat(
-                [gender_head[i](x[i]).view(bs, self.ng, -1) for i in range(self.nl)], dim=-1
-            )
-            preds["race"] = torch.cat(
-                [race_head[i](x[i]).view(bs, self.nr, -1) for i in range(self.nl)], dim=-1
-            )
-            preds["body_type"] = torch.cat(
-                [body_head[i](x[i]).view(bs, self.nb, -1) for i in range(self.nl)], dim=-1
-            )
+            preds["attrs"] = [
+                torch.cat([head[i](x[i]).view(bs, dim, -1) for i in range(self.nl)], dim=-1)
+                for head, dim in zip(attrs_head, self.attr_dims)
+            ]
+            if len(preds["attrs"]) >= 3:
+                preds["gender"], preds["race"], preds["body_type"] = preds["attrs"][:3]
         return preds
 
     def _inference(self, x):
         preds = super()._inference(x)
-        return torch.cat([preds, x["gender"], x["race"], x["body_type"]], dim=1)
+        return torch.cat([preds, *x.get("attrs", [])], dim=1)
 
     def postprocess(self, preds):
-        boxes, scores, gender_logits, race_logits, body_logits = preds.split(
-            [4, self.nc, self.ng, self.nr, self.nb], dim=-1
-        )
+        boxes, scores, *attr_logits = preds.split([4, self.nc, *self.attr_dims], dim=-1)
         scores, conf, idx = self.get_topk_index(scores, self.max_det)
         boxes = boxes.gather(dim=1, index=idx.repeat(1, 1, 4))
-        gender_logits = gender_logits.gather(dim=1, index=idx.repeat(1, 1, self.ng))
-        race_logits = race_logits.gather(dim=1, index=idx.repeat(1, 1, self.nr))
-        body_logits = body_logits.gather(dim=1, index=idx.repeat(1, 1, self.nb))
-        return torch.cat([boxes, scores, conf, gender_logits, race_logits, body_logits], dim=-1)
+        attrs = [logits.gather(dim=1, index=idx.repeat(1, 1, dim)) for logits, dim in zip(attr_logits, self.attr_dims)]
+        return torch.cat([boxes, scores, conf, *attrs], dim=-1)
 
     def bias_init(self):
         super().bias_init()
-        for cv, n_attr in [(self.cv4, self.ng), (self.cv5, self.nr), (self.cv6, self.nb)]:
-            for i, layer in enumerate(cv):
-                layer[-1].bias.data[:] = math.log(5 / n_attr / (640 / self.stride[i]) ** 2)
+        for head, dim in zip(self.cv_attrs, self.attr_dims):
+            for i, layer in enumerate(head):
+                layer[-1].bias.data[:] = math.log(5 / dim / (640 / self.stride[i]) ** 2)
         if self.end2end:
-            for cv, n_attr in [(self.one2one_cv4, self.ng), (self.one2one_cv5, self.nr), (self.one2one_cv6, self.nb)]:
-                for i, layer in enumerate(cv):
-                    layer[-1].bias.data[:] = math.log(5 / n_attr / (640 / self.stride[i]) ** 2)
+            for head, dim in zip(self.one2one_cv_attrs, self.attr_dims):
+                for i, layer in enumerate(head):
+                    layer[-1].bias.data[:] = math.log(5 / dim / (640 / self.stride[i]) ** 2)
 
     def fuse(self):
-        self.cv2 = self.cv3 = self.cv4 = self.cv5 = self.cv6 = None
+        self.cv2 = self.cv3 = self.cv_attrs = None
+        self.cv4 = self.cv5 = self.cv6 = None
 
 
 class Segment(Detect):
@@ -935,6 +935,30 @@ class Classify(nn.Module):
         if self.training:
             return x
         y = x.softmax(1)  # get final output
+        return y if self.export else (y, x)
+
+
+class Regress(nn.Module):
+    """YOLO regression head for scalar image-level targets."""
+
+    export = False
+
+    def __init__(self, c1: int, c2: int = 1, max_value: float = 1.0, k: int = 1, s: int = 1, p: int | None = None):
+        super().__init__()
+        c_ = 1280
+        self.max_value = float(max_value)
+        self.conv = Conv(c1, c_, k, s, p)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.drop = nn.Dropout(p=0.0, inplace=True)
+        self.linear = nn.Linear(c_, c2)
+
+    def forward(self, x: list[torch.Tensor] | torch.Tensor) -> torch.Tensor | tuple:
+        if isinstance(x, list):
+            x = torch.cat(x, 1)
+        x = self.linear(self.drop(self.pool(self.conv(x)).flatten(1)))
+        if self.training:
+            return x
+        y = x.sigmoid()
         return y if self.export else (y, x)
 
 

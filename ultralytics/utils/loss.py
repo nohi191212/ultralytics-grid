@@ -483,14 +483,16 @@ class v8DetectionAttrLoss(v8DetectionLoss):
     def __init__(self, model, tal_topk: int = 10, tal_topk2: int | None = None):
         super().__init__(model, tal_topk, tal_topk2)
         head = model.model[-1]  # DetectAttr
-        self.ng, self.nr, self.nb = head.ng, head.nr, head.nb
+        self.attr_dims = list(head.attr_dims)
+        self.attr_names = getattr(model, "attr_names", [f"attr_{i}" for i in range(len(self.attr_dims))])
+        self.ng = head.ng
+        self.nr = head.nr
+        self.nb = head.nb
         self.no = head.no
-        self.ce_gender = nn.CrossEntropyLoss(reduction="none")
-        self.ce_race = nn.CrossEntropyLoss(reduction="none")
-        self.ce_body = nn.CrossEntropyLoss(reduction="none")
+        self.ce_attrs = nn.ModuleList(nn.CrossEntropyLoss(reduction="none") for _ in self.attr_dims)
 
     def get_assigned_targets_and_loss(self, preds, batch):
-        loss = torch.zeros(6, device=self.device)  # box, cls, dfl, gender, race, body
+        loss = torch.zeros(3 + len(self.attr_dims), device=self.device)  # box, cls, dfl, attrs...
         pred_distri, pred_scores = (
             preds["boxes"].permute(0, 2, 1).contiguous(),
             preds["scores"].permute(0, 2, 1).contiguous(),
@@ -537,14 +539,17 @@ class v8DetectionAttrLoss(v8DetectionLoss):
 
         # Attribute loss — computed only on foreground (positive) anchors
         if fg_mask.sum():
-            pred_gender = preds["gender"].permute(0, 2, 1).contiguous()  # (bs, na, ng)
-            pred_race = preds["race"].permute(0, 2, 1).contiguous()      # (bs, na, nr)
-            pred_body = preds["body_type"].permute(0, 2, 1).contiguous() # (bs, na, nb)
+            pred_attrs = [x.permute(0, 2, 1).contiguous() for x in preds["attrs"]]
+            attrs = batch.get("attrs")
+            if attrs is None:
+                legacy = [batch.get(k) for k in ("gender", "race", "body_type")]
+                attrs = torch.cat(legacy, 1) if all(x is not None for x in legacy) else None
+            if attrs is None:
+                return (fg_mask, target_gt_idx, target_bboxes, anchor_points, stride_tensor), loss, loss.detach()
 
-            # Collect positive-anchor predictions, hard targets, and sample weights
-            pos_pred_g, pos_tgt_g, pos_wgt_g = [], [], []
-            pos_pred_r, pos_tgt_r, pos_wgt_r = [], [], []
-            pos_pred_b, pos_tgt_b, pos_wgt_b = [], [], []
+            pos_pred = [[] for _ in self.attr_dims]
+            pos_tgt = [[] for _ in self.attr_dims]
+            pos_wgt = [[] for _ in self.attr_dims]
 
             for i in range(batch_size):
                 pos_i = fg_mask[i]
@@ -554,63 +559,52 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 if len(idx_start) == 0:
                     continue
                 start, end = idx_start[0].item(), idx_start[-1].item() + 1
-                inst_gender = batch["gender"].view(-1)[start:end].long()
-                inst_race = batch["race"].view(-1)[start:end].long()
-                inst_body = batch["body_type"].view(-1)[start:end].long()
+                inst_attrs = attrs[start:end].long()
                 gt_idx_i = target_gt_idx[i]
                 indices = gt_idx_i[pos_i].long()
-                # Positive predictions for this image
-                p_g = pred_gender[i, pos_i]  # (N_pos, ng)
-                p_r = pred_race[i, pos_i]    # (N_pos, nr)
-                p_b = pred_body[i, pos_i]    # (N_pos, nb)
 
                 # Alignment scores as per-anchor sample weights
-                pos_scores = target_scores[i, pos_i, 0].to(p_g.dtype)
+                pos_scores = target_scores[i, pos_i, 0]
 
-                t_g = inst_gender[indices]
-                t_r = inst_race[indices]
-                t_b = inst_body[indices]
+                for ai, dim in enumerate(self.attr_dims):
+                    if ai >= inst_attrs.shape[1]:
+                        continue
+                    p = pred_attrs[ai][i, pos_i]
+                    t = inst_attrs[:, ai][indices]
+                    valid = (t >= 0) & (t < dim)
+                    if valid.any():
+                        pos_pred[ai].append(p[valid])
+                        pos_tgt[ai].append(t[valid])
+                        pos_wgt[ai].append(pos_scores[valid].to(p.dtype))
 
-                valid_g = (t_g >= 0) & (t_g < self.ng)
-                valid_r = (t_r >= 0) & (t_r < self.nr)
-                valid_b = (t_b >= 0) & (t_b < self.nb)
-
-                if valid_g.any():
-                    pos_pred_g.append(p_g[valid_g])
-                    pos_tgt_g.append(t_g[valid_g])
-                    pos_wgt_g.append(pos_scores[valid_g])
-                if valid_r.any():
-                    pos_pred_r.append(p_r[valid_r])
-                    pos_tgt_r.append(t_r[valid_r])
-                    pos_wgt_r.append(pos_scores[valid_r])
-                if valid_b.any():
-                    pos_pred_b.append(p_b[valid_b])
-                    pos_tgt_b.append(t_b[valid_b])
-                    pos_wgt_b.append(pos_scores[valid_b])
-
-            if pos_pred_g:
-                pred_g = torch.cat(pos_pred_g)
-                tgt_g = torch.cat(pos_tgt_g)
-                w_g = torch.cat(pos_wgt_g)
-                loss[3] = (self.ce_gender(pred_g, tgt_g) * w_g).sum() / w_g.sum().clamp_min(1.0)
-            if pos_pred_r:
-                pred_r = torch.cat(pos_pred_r)
-                tgt_r = torch.cat(pos_tgt_r)
-                w_r = torch.cat(pos_wgt_r)
-                loss[4] = (self.ce_race(pred_r, tgt_r) * w_r).sum() / w_r.sum().clamp_min(1.0)
-            if pos_pred_b:
-                pred_b = torch.cat(pos_pred_b)
-                tgt_b = torch.cat(pos_tgt_b)
-                w_b = torch.cat(pos_wgt_b)
-                loss[5] = (self.ce_body(pred_b, tgt_b) * w_b).sum() / w_b.sum().clamp_min(1.0)
+            for ai in range(len(self.attr_dims)):
+                if pos_pred[ai]:
+                    pred = torch.cat(pos_pred[ai])
+                    tgt = torch.cat(pos_tgt[ai])
+                    wgt = torch.cat(pos_wgt[ai])
+                    loss[3 + ai] = (self.ce_attrs[ai](pred, tgt) * wgt).sum() / wgt.sum().clamp_min(1.0)
 
         loss[0] *= self.hyp.box
         loss[1] *= self.hyp.cls
         loss[2] *= self.hyp.dfl
-        loss[3] *= self.hyp.get("gender", 1.0)
-        loss[4] *= self.hyp.get("race", 1.0)
-        loss[5] *= self.hyp.get("body", 1.0)
+        for ai, name in enumerate(self.attr_names):
+            loss[3 + ai] *= self.hyp.get(name, self.hyp.get("attr", 1.0))
         return (fg_mask, target_gt_idx, target_bboxes, anchor_points, stride_tensor), loss, loss.detach()
+
+
+class HeightRegressionLoss:
+    """Smooth L1 loss for normalized scalar height regression."""
+
+    def __init__(self, max_value: float = 30.0):
+        self.max_value = float(max_value)
+        self.loss = nn.SmoothL1Loss()
+
+    def __call__(self, preds: torch.Tensor | tuple, batch: dict[str, torch.Tensor]):
+        logits = preds[1] if isinstance(preds, tuple) else preds
+        target = batch["height_norm"].to(logits.device, dtype=logits.dtype).view_as(logits)
+        pred = logits.sigmoid()
+        loss = self.loss(pred, target)
+        return loss, loss.detach()
 
 
 class v8SegmentationLoss(v8DetectionLoss):

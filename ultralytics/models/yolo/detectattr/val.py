@@ -21,17 +21,25 @@ class AttrDetectionValidator(DetectionValidator):
     def __init__(self, dataloader=None, save_dir=None, args=None, _callbacks=None):
         super().__init__(dataloader, save_dir, args, _callbacks)
         self.args.task = "detectattr"
-        self.attr_correct = {"gender": 0, "race": 0, "body_type": 0}
+        self.attr_names = ["gender", "race", "body_type"]
+        self.attr_dims = [2, 7, 4]
+        self.attr_correct = {name: 0 for name in self.attr_names}
         self.attr_total = 0
 
     def init_metrics(self, model):
         super().init_metrics(model)
-        self.attr_correct = {"gender": 0, "race": 0, "body_type": 0}
+        self.attr_names = self.data.get("attr_names") or [x["name"] for x in self.data.get("attrs", [])]
+        if not self.attr_names:
+            self.attr_names = getattr(model, "attr_names", ["gender", "race", "body_type"])
+        self.attr_dims = self.data.get("attr_dims") or [len(x.get("classes", [])) for x in self.data.get("attrs", [])]
+        if not self.attr_dims:
+            self.attr_dims = getattr(model.model[-1], "attr_dims", [2, 7, 4])
+        self.attr_correct = {name: 0 for name in self.attr_names}
         self.attr_total = 0
         # Cache attribute class counts from data config
-        self.ng = self.data.get("ng", 2)
-        self.nr = self.data.get("nr", 7)
-        self.nb = self.data.get("nb", 4)
+        self.ng = self.attr_dims[0] if len(self.attr_dims) > 0 else 0
+        self.nr = self.attr_dims[1] if len(self.attr_dims) > 1 else 0
+        self.nb = self.attr_dims[2] if len(self.attr_dims) > 2 else 0
 
     def postprocess(self, preds):
         outputs = nms.non_max_suppression(
@@ -50,7 +58,7 @@ class AttrDetectionValidator(DetectionValidator):
 
     def update_metrics(self, preds: list[dict[str, torch.Tensor]], batch: dict[str, Any]) -> None:
         """Update detection metrics and track attribute accuracy."""
-        has_attrs = "gender" in batch and "race" in batch and "body_type" in batch
+        has_attrs = "attrs" in batch or ("gender" in batch and "race" in batch and "body_type" in batch)
 
         for si, pred in enumerate(preds):
             self.seen += 1
@@ -117,24 +125,25 @@ class AttrDetectionValidator(DetectionValidator):
 
                 # Attribute GT indices in the flat batch tensors
                 gt_mask = batch["batch_idx"] == si
-                gt_gender = batch["gender"].view(-1)[gt_mask].long()  # (ngt,)
-                gt_race = batch["race"].view(-1)[gt_mask].long()
-                gt_body = batch["body_type"].view(-1)[gt_mask].long()
+                gt_attrs = batch.get("attrs")
+                if gt_attrs is None:
+                    gt_attrs = torch.cat([batch["gender"], batch["race"], batch["body_type"]], 1)
+                gt_attrs = gt_attrs[gt_mask].long()
 
                 extra = pred["extra"]  # (npr, total_attr)
+                offsets = np.cumsum([0, *self.attr_dims])
 
                 for gt_i, pd_i in enumerate(matched_pd):
                     if pd_i >= 0:
-                        gender_logits = extra[pd_i, :self.ng]
-                        race_logits = extra[pd_i, self.ng:self.ng + self.nr]
-                        body_logits = extra[pd_i, self.ng + self.nr:]
-
-                        if gender_logits.argmax() == gt_gender[gt_i]:
-                            self.attr_correct["gender"] += 1
-                        if race_logits.argmax() == gt_race[gt_i]:
-                            self.attr_correct["race"] += 1
-                        if body_logits.argmax() == gt_body[gt_i]:
-                            self.attr_correct["body_type"] += 1
+                        for ai, name in enumerate(self.attr_names):
+                            if ai >= gt_attrs.shape[1]:
+                                continue
+                            target = gt_attrs[gt_i, ai]
+                            if target < 0 or target >= self.attr_dims[ai]:
+                                continue
+                            logits = extra[pd_i, offsets[ai]:offsets[ai + 1]]
+                            if logits.argmax() == target:
+                                self.attr_correct[name] += 1
                         self.attr_total += 1
 
     @staticmethod
@@ -174,24 +183,15 @@ class AttrDetectionValidator(DetectionValidator):
 
         # Attribute accuracy
         if self.attr_total > 0:
-            results["metrics/gender_acc"] = self.attr_correct["gender"] / self.attr_total
-            results["metrics/race_acc"] = self.attr_correct["race"] / self.attr_total
-            results["metrics/body_acc"] = self.attr_correct["body_type"] / self.attr_total
+            for name in self.attr_names:
+                results[f"metrics/{name}_acc"] = self.attr_correct[name] / self.attr_total
         else:
-            results["metrics/gender_acc"] = 0.0
-            results["metrics/race_acc"] = 0.0
-            results["metrics/body_acc"] = 0.0
+            for name in self.attr_names:
+                results[f"metrics/{name}_acc"] = 0.0
 
         # Custom fitness: detection mAP (60%) + average attribute accuracy (40%)
-        attr_acc_avg = (
-            results["metrics/gender_acc"] + results["metrics/race_acc"] + results["metrics/body_acc"]
-        ) / 3.0
-        if self.attr_total > 0:
-            results["fitness"] = (
-                0.5 * results["metrics/mAP50-95(B)"]
-                + 0.1 * results["metrics/mAP50(B)"]
-                + 0.4 * attr_acc_avg
-            )
+        attr_acc_avg = float(np.mean([results[f"metrics/{name}_acc"] for name in self.attr_names])) if self.attr_names else 0.0
+        results["fitness"] = 0.6 * results["metrics/mAP50-95(B)"] + 0.4 * attr_acc_avg
         return results
 
     def gather_stats(self) -> None:
@@ -201,35 +201,22 @@ class AttrDetectionValidator(DetectionValidator):
             return
 
         attr_stats = torch.tensor(
-            [
-                self.attr_correct["gender"],
-                self.attr_correct["race"],
-                self.attr_correct["body_type"],
-                self.attr_total,
-            ],
+            [*[self.attr_correct[name] for name in self.attr_names], self.attr_total],
             device=self.device,
             dtype=torch.float64,
         )
         dist.reduce(attr_stats, dst=0, op=dist.ReduceOp.SUM)
         if RANK == 0:
-            self.attr_correct["gender"] = int(attr_stats[0].item())
-            self.attr_correct["race"] = int(attr_stats[1].item())
-            self.attr_correct["body_type"] = int(attr_stats[2].item())
-            self.attr_total = int(attr_stats[3].item())
+            for i, name in enumerate(self.attr_names):
+                self.attr_correct[name] = int(attr_stats[i].item())
+            self.attr_total = int(attr_stats[-1].item())
 
     def print_results(self) -> None:
         """Print detection and attribute accuracy metrics."""
         super().print_results()
         if self.attr_total > 0:
-            LOGGER.info(
-                "Attribute accuracy — gender: %.4f  race: %.4f  body_type: %.4f  (matched samples: %d)"
-                % (
-                    self.attr_correct["gender"] / self.attr_total,
-                    self.attr_correct["race"] / self.attr_total,
-                    self.attr_correct["body_type"] / self.attr_total,
-                    self.attr_total,
-                )
-            )
+            parts = [f"{name}: {self.attr_correct[name] / self.attr_total:.4f}" for name in self.attr_names]
+            LOGGER.info("Attribute accuracy — " + "  ".join(parts) + f"  (matched samples: {self.attr_total})")
 
     def build_dataset(self, img_path, mode="val", batch=None):
         return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, stride=self.stride)

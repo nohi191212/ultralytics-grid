@@ -234,6 +234,7 @@ class Results(SimpleClass, DataExportMixin):
         gender: torch.Tensor | None = None,
         race: torch.Tensor | None = None,
         body_type: torch.Tensor | None = None,
+        attrs: dict[str, torch.Tensor] | None = None,
         gender_names: dict[int, str] | None = None,
         race_names: dict[int, str] | None = None,
         body_names: dict[int, str] | None = None,
@@ -248,6 +249,7 @@ class Results(SimpleClass, DataExportMixin):
         self.gender = gender
         self.race = race
         self.body_type = body_type
+        self.attrs = attrs
         self.gender_names = gender_names
         self.race_names = race_names
         self.body_names = body_names

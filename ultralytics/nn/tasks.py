@@ -58,6 +58,7 @@ from ultralytics.nn.modules import (
     LRPCHead,
     Pose,
     Pose26,
+    Regress,
     RepC3,
     RepConv,
     RepNCSPELAN4,
@@ -78,6 +79,7 @@ from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, SETTINGS, WINDOWS, YAML,
 from ultralytics.utils.checks import REMOTE_FILE_PREFIXES, check_file, check_requirements, check_suffix, check_yaml
 from ultralytics.utils.loss import (
     E2ELoss,
+    HeightRegressionLoss,
     PoseLoss26,
     v8ClassificationLoss,
     v8DetectionAttrLoss,
@@ -524,12 +526,15 @@ class AttrDetectionModel(DetectionModel):
 
     def __init__(self, cfg="yolo26-attr.yaml", ch=3, nc=None, verbose=True):
         super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
-        ng = self.yaml.get("ng", 2)
-        nr = self.yaml.get("nr", 7)
-        nb = self.yaml.get("nb", 2)
-        self.gender_names = {i: str(i) for i in range(ng)}
-        self.race_names = {i: str(i) for i in range(nr)}
-        self.body_names = {i: str(i) for i in range(nb)}
+        head = self.model[-1]
+        self.attr_names = self.yaml.get("attr_names") or ["gender", "race", "body_type"][: len(head.attr_dims)]
+        self.attr_dims = self.yaml.get("attr_dims") or head.attr_dims
+        self.attr_class_names = {
+            name: {i: str(i) for i in range(dim)} for name, dim in zip(self.attr_names, self.attr_dims)
+        }
+        self.gender_names = self.attr_class_names.get("gender", {i: str(i) for i in range(getattr(head, "ng", 0))})
+        self.race_names = self.attr_class_names.get("race", {i: str(i) for i in range(getattr(head, "nr", 0))})
+        self.body_names = self.attr_class_names.get("body_type", {i: str(i) for i in range(getattr(head, "nb", 0))})
 
     def init_criterion(self):
         return E2ELoss(self, v8DetectionAttrLoss) if getattr(self, "end2end", False) else v8DetectionAttrLoss(self)
@@ -730,6 +735,13 @@ class ClassificationModel(BaseModel):
     def init_criterion(self):
         """Initialize the loss criterion for the ClassificationModel."""
         return v8ClassificationLoss()
+
+
+class RegressionModel(ClassificationModel):
+    """YOLO image regression model for scalar targets such as off-ground height."""
+
+    def init_criterion(self):
+        return HeightRegressionLoss(max_value=float(self.yaml.get("max_value", 1.0)))
 
 
 class RTDETRDetectionModel(DetectionModel):
@@ -1586,6 +1598,7 @@ def parse_model(d, ch, verbose=True):
     max_channels = float("inf")
     nc, act, scales, end2end = (d.get(x) for x in ("nc", "activation", "scales", "end2end"))
     ng, nr, nb = (d.get(x, 0) for x in ("ng", "nr", "nb"))
+    attr_dims = d.get("attr_dims", [ng, nr, nb] if any((ng, nr, nb)) else [])
     reg_max = d.get("reg_max", 16)
     depth, width, kpt_shape = (d.get(x, 1.0) for x in ("depth_multiple", "width_multiple", "kpt_shape"))
     scale = d.get("scale")
@@ -1607,6 +1620,7 @@ def parse_model(d, ch, verbose=True):
     base_modules = frozenset(
         {
             Classify,
+            Regress,
             Conv,
             ConvTranspose,
             GhostConv,
@@ -1678,6 +1692,8 @@ def parse_model(d, ch, verbose=True):
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 != nc (e.g., Classify() output)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
+            if m is Regress:
+                c2 = args[0]
             if m is C2fAttn:  # set 1) embed channels and 2) num heads
                 args[1] = make_divisible(min(args[1], max_channels // 2) * width, 8)
                 args[2] = int(max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2])
@@ -1817,6 +1833,8 @@ def guess_model_task(model):
         m = cfg["head"][-1][-2].lower()  # output module name
         if m in {"classify", "classifier", "cls", "fc"}:
             return "classify"
+        if m in {"regress", "regression"}:
+            return "regress"
         if "detectattr" in m:
             return "detectattr"
         if "detect" in m:
@@ -1845,6 +1863,8 @@ def guess_model_task(model):
                 return "segment"
             elif isinstance(m, Classify):
                 return "classify"
+            elif isinstance(m, Regress):
+                return "regress"
             elif isinstance(m, Pose):
                 return "pose"
             elif isinstance(m, OBB):

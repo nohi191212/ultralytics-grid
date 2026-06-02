@@ -16,6 +16,7 @@ from ultralytics.nn.tasks import (
     DetectionModel,
     OBBModel,
     PoseModel,
+    RegressionModel,
     SegmentationModel,
     WorldModel,
     YOLOEModel,
@@ -121,6 +122,12 @@ class YOLO(Model):
                 "trainer": yolo.detectattr.AttrDetectionTrainer,
                 "validator": yolo.detectattr.AttrDetectionValidator,
                 "predictor": yolo.detectattr.AttrDetectionPredictor,
+            },
+            "regress": {
+                "model": RegressionModel,
+                "trainer": yolo.regress.RegressionTrainer,
+                "validator": yolo.regress.RegressionValidator,
+                "predictor": yolo.regress.RegressionPredictor,
             },
         }
 

@@ -23,7 +23,7 @@ from ultralytics.utils.torch_utils import TORCHVISION_0_10, TORCHVISION_0_11, TO
 
 DEFAULT_MEAN = (0.0, 0.0, 0.0)
 DEFAULT_STD = (1.0, 1.0, 1.0)
-ATTR_KEYS = ("gender", "race", "body_type")
+ATTR_KEYS = ("attrs", "gender", "race", "body_type")
 
 
 def _filter_attr_labels(labels: dict[str, Any], keep: np.ndarray | list[int]) -> None:
@@ -815,36 +815,35 @@ class Mosaic(BaseMixTransform):
         if not mosaic_labels:
             return {}
         cls = []
-        gender = []
-        race = []
-        body_type = []
+        attr_keys = [k for k in ATTR_KEYS if any(k in labels for labels in mosaic_labels)]
+        attr_values = {k: [] for k in attr_keys}
         instances = []
         imgsz = self.imgsz * 2  # mosaic imgsz
         for labels in mosaic_labels:
             nl = len(labels["cls"])
             cls.append(labels["cls"])
             instances.append(labels["instances"])
-            gender.append(labels.get("gender", np.full((nl, 1), -1, dtype=np.int64)))
-            race.append(labels.get("race", np.full((nl, 1), -1, dtype=np.int64)))
-            body_type.append(labels.get("body_type", np.full((nl, 1), -1, dtype=np.int64)))
+            for key in attr_keys:
+                shape = (nl, 1)
+                for source in mosaic_labels:
+                    if key in source:
+                        shape = (nl, *source[key].shape[1:])
+                        break
+                attr_values[key].append(labels.get(key, np.full(shape, -1, dtype=np.int64)))
         # Final labels
         final_labels = {
             "im_file": mosaic_labels[0]["im_file"],
             "ori_shape": mosaic_labels[0]["ori_shape"],
             "resized_shape": (imgsz, imgsz),
             "cls": np.concatenate(cls, 0),
-            "gender": np.concatenate(gender, 0),
-            "race": np.concatenate(race, 0),
-            "body_type": np.concatenate(body_type, 0),
             "instances": Instances.concatenate(instances, axis=0),
             "mosaic_border": self.border,
         }
+        final_labels.update({key: np.concatenate(values, 0) for key, values in attr_values.items()})
         final_labels["instances"].clip(imgsz, imgsz)
         good = final_labels["instances"].remove_zero_area_boxes()
         final_labels["cls"] = final_labels["cls"][good]
-        final_labels["gender"] = final_labels["gender"][good]
-        final_labels["race"] = final_labels["race"][good]
-        final_labels["body_type"] = final_labels["body_type"][good]
+        _filter_attr_labels(final_labels, good)
         if "texts" in mosaic_labels[0]:
             final_labels["texts"] = mosaic_labels[0]["texts"]
         return final_labels
@@ -2094,6 +2093,7 @@ class Format:
         img = labels.pop("img")
         h, w = img.shape[:2]
         cls = labels.pop("cls")
+        attrs = labels.pop("attrs", None)
         gender = labels.pop("gender", None)
         race = labels.pop("race", None)
         body_type = labels.pop("body_type", None)
@@ -2101,7 +2101,7 @@ class Format:
         instances.convert_bbox(format=self.bbox_format)
         instances.denormalize(w, h)
         nl = len(instances)
-        for attr_name, attr in (("gender", gender), ("race", race), ("body_type", body_type)):
+        for attr_name, attr in (("attrs", attrs), ("gender", gender), ("race", race), ("body_type", body_type)):
             if attr is not None and len(attr) != nl:
                 raise ValueError(
                     f"{attr_name} labels must match boxes after augmentation, got {len(attr)} attrs and {nl} boxes."
@@ -2136,6 +2136,8 @@ class Format:
         labels["img"] = self._format_img(img)
         labels["cls"] = torch.from_numpy(cls) if nl else torch.zeros(nl, 1)
         labels["bboxes"] = torch.from_numpy(instances.bboxes) if nl else torch.zeros((nl, 4))
+        attr_width = attrs.shape[1] if attrs is not None and attrs.ndim == 2 else 0
+        labels["attrs"] = torch.from_numpy(attrs) if nl and attrs is not None else torch.full((nl, attr_width), -1, dtype=torch.int64)
         labels["gender"] = torch.from_numpy(gender) if nl and gender is not None else torch.full((nl, 1), -1, dtype=torch.int64)
         labels["race"] = torch.from_numpy(race) if nl and race is not None else torch.full((nl, 1), -1, dtype=torch.int64)
         labels["body_type"] = torch.from_numpy(body_type) if nl and body_type is not None else torch.full((nl, 1), -1, dtype=torch.int64)

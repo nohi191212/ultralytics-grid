@@ -43,7 +43,7 @@ from .utils import (
 )
 
 # Ultralytics dataset *.cache version, >= 1.0.0 for Ultralytics YOLO models
-DATASET_CACHE_VERSION = "1.0.3"
+DATASET_CACHE_VERSION = "1.0.4"
 
 
 class YOLODataset(BaseDataset):
@@ -84,8 +84,26 @@ class YOLODataset(BaseDataset):
         self.use_keypoints = task == "pose"
         self.use_obb = task == "obb"
         self.data = data
+        self.attr_names, self.attr_dims = self._parse_attrs(data or {})
+        self.num_attrs = len(self.attr_dims)
         assert not (self.use_segments and self.use_keypoints), "Can not use both segments and keypoints."
         super().__init__(*args, channels=self.data.get("channels", 3), **kwargs)
+
+    @staticmethod
+    def _parse_attrs(data: dict) -> tuple[list[str], list[int]]:
+        attrs = data.get("attrs") or []
+        if attrs:
+            names = [str(x["name"]) for x in attrs]
+            dims = [len(x.get("classes", [])) for x in attrs]
+            return names, dims
+        legacy = [
+            ("gender", data.get("ng", len(data.get("gender_names", [])) or 2)),
+            ("race", data.get("nr", len(data.get("race_names", [])) or 7)),
+            ("body_type", data.get("nb", len(data.get("body_names", [])) or 4)),
+        ]
+        if any(k in data for k in ("ng", "nr", "nb", "gender_names", "race_names", "body_names")):
+            return [x[0] for x in legacy], [int(x[1]) for x in legacy]
+        return [], []
 
     def cache_labels(self, path: Path = Path("./labels.cache")) -> dict:
         """Cache dataset labels, check images and read shapes.
@@ -118,6 +136,7 @@ class YOLODataset(BaseDataset):
                     repeat(nkpt),
                     repeat(ndim),
                     repeat(self.single_cls),
+                    repeat(self.num_attrs),
                 ),
             )
             pbar = TQDM(results, desc=desc, total=total)
@@ -135,13 +154,15 @@ class YOLODataset(BaseDataset):
                             "bboxes": lb[:, 1:],  # n, 4
                             "segments": segments,
                             "keypoints": keypoint,
-                            "gender": attrs[:, 0:1],  # n, 1
-                            "race": attrs[:, 1:2],  # n, 1
-                            "body_type": attrs[:, 2:3],  # n, 1
+                            "attrs": attrs,
                             "normalized": True,
                             "bbox_format": "xywh",
                         }
                     )
+                    if attrs.shape[1] >= 3:
+                        x["labels"][-1]["gender"] = attrs[:, 0:1]
+                        x["labels"][-1]["race"] = attrs[:, 1:2]
+                        x["labels"][-1]["body_type"] = attrs[:, 2:3]
                 if msg:
                     msgs.append(msg)
                 pbar.desc = f"{desc} {nf} images, {nm + ne} backgrounds, {nc} corrupt"
@@ -301,7 +322,7 @@ class YOLODataset(BaseDataset):
                 value = torch.stack(value, 0)
             elif k == "visuals":
                 value = torch.nn.utils.rnn.pad_sequence(value, batch_first=True)
-            if k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb", "gender", "race", "body_type"}:
+            if k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb", "attrs", "gender", "race", "body_type"}:
                 value = torch.cat(value, 0)
             new_batch[k] = value
         new_batch["batch_idx"] = list(new_batch["batch_idx"])

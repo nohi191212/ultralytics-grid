@@ -60,22 +60,24 @@ class AttrDetectionPredictor(BasePredictor):
         results = []
         inner = self._get_inner_model()
         head = inner.model[-1]
-        ng, nr, nb = head.ng, head.nr, head.nb
+        attr_dims = list(getattr(head, "attr_dims", [head.ng, head.nr, head.nb]))
+        attr_names = getattr(inner, "attr_names", [f"attr_{i}" for i in range(len(attr_dims))])
         gender_names = getattr(inner, "gender_names", None)
         race_names = getattr(inner, "race_names", None)
         body_names = getattr(inner, "body_names", None)
+        offsets = torch.tensor([0, *attr_dims]).cumsum(0).tolist()
         for pred, orig_img, img_path in zip(preds, orig_imgs, self.batch[0]):
             pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
             if len(pred):
-                # DetectAttr.postprocess output: [boxes(4), scores(1), conf(1), gender(ng), race(nr), body(nb)]
-                # attr logits start at column 6 (skip boxes + scores + conf = 4+1+1=6)
                 extra = pred[:, 6:]
-                gender_logits = extra[:, :ng]
-                race_logits = extra[:, ng:ng + nr]
-                body_logits = extra[:, ng + nr:ng + nr + nb]
-                gender = gender_logits.argmax(dim=-1)
-                race = race_logits.argmax(dim=-1)
-                body_type = body_logits.argmax(dim=-1)
+                attrs = {
+                    name: extra[:, offsets[i]:offsets[i + 1]].argmax(dim=-1)
+                    for i, name in enumerate(attr_names)
+                    if offsets[i + 1] <= extra.shape[1]
+                }
+                gender = attrs.get("gender")
+                race = attrs.get("race")
+                body_type = attrs.get("body_type")
                 results.append(
                     Results(
                         orig_img=orig_img,
@@ -85,6 +87,7 @@ class AttrDetectionPredictor(BasePredictor):
                         gender=gender,
                         race=race,
                         body_type=body_type,
+                        attrs=attrs,
                         gender_names=gender_names,
                         race_names=race_names,
                         body_names=body_names,
