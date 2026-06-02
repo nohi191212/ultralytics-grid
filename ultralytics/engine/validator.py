@@ -191,7 +191,9 @@ class BaseValidator:
 
             if self.args.task == "regress" and str(self.args.data).rsplit(".", 1)[-1] in {"yaml", "yml"}:
                 self.data = YAML.load(self.args.data)
-                self.data["path"] = str(Path(self.args.data).parent if "path" not in self.data else Path(self.data["path"]))
+                self.data["path"] = str(
+                    Path(self.args.data).parent if "path" not in self.data else Path(self.data["path"])
+                )
                 self.data.setdefault("val", self.data.get("images", "images/{split}").format(split="val"))
                 self.data.setdefault("channels", 3)
             elif str(self.args.data).rsplit(".", 1)[-1] in {"yaml", "yml"}:
