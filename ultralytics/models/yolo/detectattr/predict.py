@@ -44,15 +44,14 @@ class AttrDetectionPredictor(BasePredictor):
     def get_obj_feats(feat_maps, idxs):
         s = min(x.shape[1] for x in feat_maps)
         obj_feats = torch.cat(
-            [x.permute(0, 2, 3, 1).reshape(x.shape[0], -1, s, x.shape[1] // s).mean(dim=-1)
-             for x in feat_maps], dim=1
+            [x.permute(0, 2, 3, 1).reshape(x.shape[0], -1, s, x.shape[1] // s).mean(dim=-1) for x in feat_maps], dim=1
         )
         return [feats[idx] if idx.shape[0] else [] for feats, idx in zip(obj_feats, idxs)]
 
     def _get_inner_model(self):
         """Get the underlying task model, penetrating AutoBackend/PyTorchBackend wrappers."""
         m = self.model
-        if hasattr(m, 'backend') and hasattr(m.backend, 'model'):
+        if hasattr(m, "backend") and hasattr(m.backend, "model"):
             return m.backend.model
         return m
 
@@ -71,7 +70,7 @@ class AttrDetectionPredictor(BasePredictor):
             if len(pred):
                 extra = pred[:, 6:]
                 attrs = {
-                    name: extra[:, offsets[i]:offsets[i + 1]].argmax(dim=-1)
+                    name: extra[:, offsets[i] : offsets[i + 1]].argmax(dim=-1)
                     for i, name in enumerate(attr_names)
                     if offsets[i + 1] <= extra.shape[1]
                 }
@@ -94,8 +93,14 @@ class AttrDetectionPredictor(BasePredictor):
                     )
                 )
             else:
-                results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names,
-                                       gender_names=gender_names,
-                                       race_names=race_names,
-                                       body_names=body_names))
+                results.append(
+                    Results(
+                        orig_img=orig_img,
+                        path=img_path,
+                        names=self.model.names,
+                        gender_names=gender_names,
+                        race_names=race_names,
+                        body_names=body_names,
+                    )
+                )
         return results
