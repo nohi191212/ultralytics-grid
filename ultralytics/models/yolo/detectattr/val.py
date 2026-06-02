@@ -100,9 +100,7 @@ class AttrDetectionValidator(DetectionValidator):
             if self.args.plots:
                 self.confusion_matrix.process_batch(pred, pbatch, conf=self.args.conf)
                 if self.args.visualize:
-                    self.confusion_matrix.plot_matches(
-                        batch["img"][si], pbatch["im_file"], self.save_dir
-                    )
+                    self.confusion_matrix.plot_matches(batch["img"][si], pbatch["im_file"], self.save_dir)
 
             if self.args.save_json or self.args.save_txt:
                 predn = self._prepare_pred(pred)
@@ -141,7 +139,7 @@ class AttrDetectionValidator(DetectionValidator):
                             target = gt_attrs[gt_i, ai]
                             if target < 0 or target >= self.attr_dims[ai]:
                                 continue
-                            logits = extra[pd_i, offsets[ai]:offsets[ai + 1]]
+                            logits = extra[pd_i, offsets[ai] : offsets[ai + 1]]
                             if logits.argmax() == target:
                                 self.attr_correct[name] += 1
                         self.attr_total += 1
@@ -190,7 +188,9 @@ class AttrDetectionValidator(DetectionValidator):
                 results[f"metrics/{name}_acc"] = 0.0
 
         # Custom fitness: detection mAP (60%) + average attribute accuracy (40%)
-        attr_acc_avg = float(np.mean([results[f"metrics/{name}_acc"] for name in self.attr_names])) if self.attr_names else 0.0
+        attr_acc_avg = (
+            float(np.mean([results[f"metrics/{name}_acc"] for name in self.attr_names])) if self.attr_names else 0.0
+        )
         results["fitness"] = 0.6 * results["metrics/mAP50-95(B)"] + 0.4 * attr_acc_avg
         return results
 
