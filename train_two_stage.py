@@ -1,9 +1,9 @@
 # train_two_stage.py — YOLO26s DetectAttr 两阶段训练脚本
 # Stage 1: 冻结 backbone，训练 neck + heads (warmup 属性头)
 # Stage 2: 全解冻，继续训练至收敛
-import sys
-import os
 import argparse
+import os
+import sys
 from pathlib import Path
 
 os.chdir(os.path.dirname(__file__))
@@ -53,10 +53,10 @@ results_s1 = model.train(
     batch=args.batch,
     device=DEVICE,
     workers=workers,
-    lr0=0.01,          # 较高初始 LR，让属性头快速学习
-    lrf=0.1,           # 最终 LR = 0.001
+    lr0=0.01,  # 较高初始 LR，让属性头快速学习
+    lrf=0.1,  # 最终 LR = 0.001
     warmup_epochs=1,
-    freeze=11,         # 冻结 backbone (层 0-10)，neck + heads 可训练
+    freeze=11,  # 冻结 backbone (层 0-10)，neck + heads 可训练
     project=args.project,
     name="stage1_frozen",
     exist_ok=True,
@@ -77,10 +77,10 @@ results_s2 = model2.train(
     batch=args.batch,
     device=DEVICE,
     workers=workers,
-    lr0=0.005,         # 较低初始 LR，微调全模型
-    lrf=0.01,          # 最终 LR = 5e-5
+    lr0=0.005,  # 较低初始 LR，微调全模型
+    lrf=0.01,  # 最终 LR = 5e-5
     warmup_epochs=2,
-    freeze=0,           # 全解冻
+    freeze=0,  # 全解冻
     project=args.project,
     name="stage2_full",
     exist_ok=True,
