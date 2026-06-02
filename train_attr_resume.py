@@ -1,26 +1,27 @@
 # train_attr.py — YOLO26s DetectAttr 训练脚本
-import sys
-from pathlib import Path
 import argparse
 import os
+from pathlib import Path
+
 os.chdir(os.path.dirname(__file__))
 
 from ultralytics import YOLO
 
 argparser = argparse.ArgumentParser()
 
-argparser.add_argument('--config', required=True)
-argparser.add_argument('--pretrained', default=None, help='Checkpoint path to resume from, usually weights/last.pt')
-argparser.add_argument('--data', required=True)
-argparser.add_argument('--project', required=True)
-argparser.add_argument('--device', required=True)
-argparser.add_argument('--epochs', type=int, default=100)
-argparser.add_argument('--name', default='exp')
+argparser.add_argument("--config", required=True)
+argparser.add_argument("--pretrained", default=None, help="Checkpoint path to resume from, usually weights/last.pt")
+argparser.add_argument("--data", required=True)
+argparser.add_argument("--project", required=True)
+argparser.add_argument("--device", required=True)
+argparser.add_argument("--epochs", type=int, default=100)
+argparser.add_argument("--name", default="exp")
 
 args = argparser.parse_args()
 
+
 def parse_device(device_str):
-    """解析设备并返回设备配置和 GPU 数量"""
+    """解析设备并返回设备配置和 GPU 数量."""
     if device_str.lower() == "cpu":
         return "cpu", 0  # CPU 模式，GPU 数量为 0
     elif "," in device_str:
@@ -29,8 +30,10 @@ def parse_device(device_str):
     else:
         return int(device_str), 1
 
+
 DEVICE, gpu_count = parse_device(args.device)
 import multiprocessing
+
 cpu_count = multiprocessing.cpu_count()
 workers = max(4, gpu_count * 4) if gpu_count > 0 else 4
 workers = min(workers, 4)  # 不超过 CPU 核心数
