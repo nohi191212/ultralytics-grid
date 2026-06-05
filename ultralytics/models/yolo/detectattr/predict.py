@@ -19,7 +19,7 @@ class AttrDetectionPredictor(BasePredictor):
             self.args.classes,
             self.args.agnostic_nms,
             max_det=self.args.max_det,
-            nc=0 if self.args.task == "detectattr" else len(self.model.names),
+            nc=len(self.model.names),
             end2end=getattr(self.model, "end2end", False),
             rotated=False,
             return_idxs=save_feats,
@@ -83,7 +83,7 @@ class AttrDetectionPredictor(BasePredictor):
                         orig_img=orig_img,
                         path=img_path,
                         names=self.model.names,
-                        boxes=pred[:, :6],  # xyxy(4) + scores(1) + conf(1)
+                        boxes=pred[:, :6],  # xyxy(4) + conf(1) + cls(1)
                         gender=gender,
                         race=race,
                         body_type=body_type,

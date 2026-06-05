@@ -1368,17 +1368,18 @@ class SettingsManager(JSONDict):
             "openvino_msg": True,  # OpenVINO export on Intel CPU message
         }
 
-        self.help_msg = (
-            f"\nView Ultralytics Settings with 'yolo settings' or at '{self.file}'"
-            "\nUpdate Settings with 'yolo settings key=value', i.e. 'yolo settings runs_dir=path/to/dir'. "
-            "For help see https://docs.ultralytics.com/quickstart/#ultralytics-settings."
-        )
+        # self.help_msg = (
+        #     f"\nView Ultralytics Settings with 'yolo settings' or at '{self.file}'"
+        #     "\nUpdate Settings with 'yolo settings key=value', i.e. 'yolo settings runs_dir=path/to/dir'. "
+        #     "For help see https://docs.ultralytics.com/quickstart/#ultralytics-settings."
+        # )
+        self.help_msg = ("")
 
         with torch_distributed_zero_first(LOCAL_RANK):
             super().__init__(self.file)
 
             if not self.file.exists() or not self:  # Check if file doesn't exist or is empty
-                LOGGER.info(f"Creating new Ultralytics Settings v{version} file ✅ {self.help_msg}")
+                # LOGGER.info(f"Creating new Ultralytics Settings v{version} file ✅ {self.help_msg}")
                 self.reset()
 
             self._validate_settings()

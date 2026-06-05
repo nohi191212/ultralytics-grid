@@ -563,8 +563,9 @@ class v8DetectionAttrLoss(v8DetectionLoss):
                 gt_idx_i = target_gt_idx[i]
                 indices = gt_idx_i[pos_i].long()
 
-                # Alignment scores as per-anchor sample weights
-                pos_scores = target_scores[i, pos_i, 0]
+                # Alignment scores as per-anchor sample weights. Sum over classes because positive anchors
+                # may be assigned to any detection class, not only class 0.
+                pos_scores = target_scores[i, pos_i].sum(-1)
 
                 for ai, dim in enumerate(self.attr_dims):
                     if ai >= inst_attrs.shape[1]:

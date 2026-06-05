@@ -24,7 +24,7 @@ class AttrDetectionValidator(DetectionValidator):
         self.attr_names = ["gender", "race", "body_type"]
         self.attr_dims = [2, 7, 4]
         self.attr_correct = {name: 0 for name in self.attr_names}
-        self.attr_total = 0
+        self.attr_total = {name: 0 for name in self.attr_names}
 
     def init_metrics(self, model):
         super().init_metrics(model)
@@ -35,7 +35,7 @@ class AttrDetectionValidator(DetectionValidator):
         if not self.attr_dims:
             self.attr_dims = getattr(model.model[-1], "attr_dims", [2, 7, 4])
         self.attr_correct = {name: 0 for name in self.attr_names}
-        self.attr_total = 0
+        self.attr_total = {name: 0 for name in self.attr_names}
         # Cache attribute class counts from data config
         self.ng = self.attr_dims[0] if len(self.attr_dims) > 0 else 0
         self.nr = self.attr_dims[1] if len(self.attr_dims) > 1 else 0
@@ -46,14 +46,14 @@ class AttrDetectionValidator(DetectionValidator):
             preds,
             self.args.conf,
             self.args.iou,
-            nc=0 if self.args.task == "detectattr" else self.nc,
+            nc=self.nc,
             multi_label=True,
             agnostic=self.args.single_cls or self.args.agnostic_nms,
             max_det=self.args.max_det,
             end2end=self.end2end,
             rotated=False,
         )
-        # DetectAttr.postprocess output: [boxes(4), scores(1), conf(1), gender(ng), race(nr), body(nb)]
+        # DetectAttr.postprocess output: [xyxy(4), conf(1), cls(1), attr logits...]
         return [{"bboxes": x[:, :4], "conf": x[:, 4], "cls": x[:, 5], "extra": x[:, 6:]} for x in outputs]
 
     def update_metrics(self, preds: list[dict[str, torch.Tensor]], batch: dict[str, Any]) -> None:
@@ -141,10 +141,10 @@ class AttrDetectionValidator(DetectionValidator):
                             target = gt_attrs[gt_i, ai]
                             if target < 0 or target >= self.attr_dims[ai]:
                                 continue
+                            self.attr_total[name] += 1
                             logits = extra[pd_i, offsets[ai]:offsets[ai + 1]]
                             if logits.argmax() == target:
                                 self.attr_correct[name] += 1
-                        self.attr_total += 1
 
     @staticmethod
     def _greedy_match(iou: torch.Tensor) -> list[int]:
@@ -182,12 +182,9 @@ class AttrDetectionValidator(DetectionValidator):
         results = self.metrics.results_dict
 
         # Attribute accuracy
-        if self.attr_total > 0:
-            for name in self.attr_names:
-                results[f"metrics/{name}_acc"] = self.attr_correct[name] / self.attr_total
-        else:
-            for name in self.attr_names:
-                results[f"metrics/{name}_acc"] = 0.0
+        for name in self.attr_names:
+            total = self.attr_total[name]
+            results[f"metrics/{name}_acc"] = self.attr_correct[name] / total if total > 0 else 0.0
 
         # Custom fitness: detection mAP (60%) + average attribute accuracy (40%)
         attr_acc_avg = float(np.mean([results[f"metrics/{name}_acc"] for name in self.attr_names])) if self.attr_names else 0.0
@@ -201,7 +198,10 @@ class AttrDetectionValidator(DetectionValidator):
             return
 
         attr_stats = torch.tensor(
-            [*[self.attr_correct[name] for name in self.attr_names], self.attr_total],
+            [
+                *[self.attr_correct[name] for name in self.attr_names],
+                *[self.attr_total[name] for name in self.attr_names],
+            ],
             device=self.device,
             dtype=torch.float64,
         )
@@ -209,14 +209,18 @@ class AttrDetectionValidator(DetectionValidator):
         if RANK == 0:
             for i, name in enumerate(self.attr_names):
                 self.attr_correct[name] = int(attr_stats[i].item())
-            self.attr_total = int(attr_stats[-1].item())
+                self.attr_total[name] = int(attr_stats[len(self.attr_names) + i].item())
 
     def print_results(self) -> None:
         """Print detection and attribute accuracy metrics."""
         super().print_results()
-        if self.attr_total > 0:
-            parts = [f"{name}: {self.attr_correct[name] / self.attr_total:.4f}" for name in self.attr_names]
-            LOGGER.info("Attribute accuracy — " + "  ".join(parts) + f"  (matched samples: {self.attr_total})")
+        if any(self.attr_total[name] > 0 for name in self.attr_names):
+            parts = [
+                f"{name}: {self.attr_correct[name] / self.attr_total[name]:.4f} ({self.attr_total[name]})"
+                if self.attr_total[name] > 0 else f"{name}: n/a (0)"
+                for name in self.attr_names
+            ]
+            LOGGER.info("Attribute accuracy — " + "  ".join(parts))
 
     def build_dataset(self, img_path, mode="val", batch=None):
         return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, stride=self.stride)
