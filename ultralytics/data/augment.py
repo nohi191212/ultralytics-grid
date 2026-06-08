@@ -1982,7 +1982,9 @@ class Albumentations:
                 bboxes = labels["instances"].bboxes
                 attr_indices = np.arange(len(cls))
                 # TODO: add supports of segments and keypoints
-                new = self.transform(image=im, bboxes=bboxes, class_labels=cls, attr_indices=attr_indices)  # transformed
+                new = self.transform(
+                    image=im, bboxes=bboxes, class_labels=cls, attr_indices=attr_indices
+                )  # transformed
                 if len(new["class_labels"]) > 0:  # skip update if no bbox in new im
                     labels["img"] = new["image"]
                     labels["cls"] = np.array(new["class_labels"]).reshape(-1, 1)
@@ -2137,10 +2139,18 @@ class Format:
         labels["cls"] = torch.from_numpy(cls) if nl else torch.zeros(nl, 1)
         labels["bboxes"] = torch.from_numpy(instances.bboxes) if nl else torch.zeros((nl, 4))
         attr_width = attrs.shape[1] if attrs is not None and attrs.ndim == 2 else 0
-        labels["attrs"] = torch.from_numpy(attrs) if nl and attrs is not None else torch.full((nl, attr_width), -1, dtype=torch.int64)
-        labels["gender"] = torch.from_numpy(gender) if nl and gender is not None else torch.full((nl, 1), -1, dtype=torch.int64)
-        labels["race"] = torch.from_numpy(race) if nl and race is not None else torch.full((nl, 1), -1, dtype=torch.int64)
-        labels["body_type"] = torch.from_numpy(body_type) if nl and body_type is not None else torch.full((nl, 1), -1, dtype=torch.int64)
+        labels["attrs"] = (
+            torch.from_numpy(attrs) if nl and attrs is not None else torch.full((nl, attr_width), -1, dtype=torch.int64)
+        )
+        labels["gender"] = (
+            torch.from_numpy(gender) if nl and gender is not None else torch.full((nl, 1), -1, dtype=torch.int64)
+        )
+        labels["race"] = (
+            torch.from_numpy(race) if nl and race is not None else torch.full((nl, 1), -1, dtype=torch.int64)
+        )
+        labels["body_type"] = (
+            torch.from_numpy(body_type) if nl and body_type is not None else torch.full((nl, 1), -1, dtype=torch.int64)
+        )
         if self.return_keypoint:
             labels["keypoints"] = (
                 torch.empty(0, 3) if instances.keypoints is None else torch.from_numpy(instances.keypoints)

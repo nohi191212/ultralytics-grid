@@ -1373,7 +1373,7 @@ class SettingsManager(JSONDict):
         #     "\nUpdate Settings with 'yolo settings key=value', i.e. 'yolo settings runs_dir=path/to/dir'. "
         #     "For help see https://docs.ultralytics.com/quickstart/#ultralytics-settings."
         # )
-        self.help_msg = ("")
+        self.help_msg = ""
 
         with torch_distributed_zero_first(LOCAL_RANK):
             super().__init__(self.file)
