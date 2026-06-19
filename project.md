@@ -358,4 +358,3 @@ ultralytics/models/yolo/detectattr/predict.py
 ```
 
 具体需要保证训练和推理使用一致的 ROI 规则。
-

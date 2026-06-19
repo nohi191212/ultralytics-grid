@@ -239,13 +239,17 @@ def verify_image_label(args: tuple) -> list:
                     points = lb[:, 5:].reshape(-1, ndim)[:, :2]
                 else:
                     valid_cols = (5, 8) if not num_attrs else (5, 8, 5 + int(num_attrs))
-                    assert lb.shape[1] in valid_cols, f"labels require one of {valid_cols} columns, {lb.shape[1]} detected"
+                    assert lb.shape[1] in valid_cols, (
+                        f"labels require one of {valid_cols} columns, {lb.shape[1]} detected"
+                    )
                     points = lb[:, 1:5]  # xywh only (columns 1-4)
                 # Coordinate points check with 1% tolerance
                 assert points.max() <= 1.01, f"non-normalized or out of bounds coordinates {points[points > 1.01]}"
                 assert lb[:, :5].min() >= -0.01, f"negative class labels or coordinate {lb[:, :5][lb[:, :5] < -0.01]}"
                 if lb.shape[1] > 5:
-                    assert lb[:, 5:].min() >= -1.01, f"attribute labels below -1 detected {lb[:, 5:][lb[:, 5:] < -1.01]}"
+                    assert lb[:, 5:].min() >= -1.01, (
+                        f"attribute labels below -1 detected {lb[:, 5:][lb[:, 5:] < -1.01]}"
+                    )
 
                 # All labels — max cls check uses column 0 only
                 max_cls = 0 if single_cls else lb[:, 0].max()  # max label count

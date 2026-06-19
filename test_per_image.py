@@ -1,13 +1,17 @@
 """Per-image evaluation: mAP + gender/race/body_type accuracy."""
+
 from pathlib import Path
-import numpy as np
-import torch
+
 import cv2
-from ultralytics import YOLO
+import numpy as np
 from tqdm import tqdm
 
+from ultralytics import YOLO
+
 # --- config ---
-BEST = "/mnt/HithinkOmniSSD/user_workspace/caisihang/project/ultralytics/runs/two_stage_0512/stage2_full/weights/last.pt"
+BEST = (
+    "/mnt/HithinkOmniSSD/user_workspace/caisihang/project/ultralytics/runs/two_stage_0512/stage2_full/weights/last.pt"
+)
 DATA_YAML = "/mnt/HithinkOmniSSD/user_workspace/caisihang/dataset/OmniRobotFaceDetect/data.yaml"
 VAL_IMG = Path("/mnt/dataset/OmniRobotFaceDetect/images/val")
 VAL_LBL = Path("/mnt/dataset/OmniRobotFaceDetect/labels/val")
@@ -26,8 +30,8 @@ print(f"Model head: ng={ng} nr={nr} nb={nb}")
 print(f"Val images: {sum(1 for _ in VAL_IMG.glob('*.*'))}")
 
 # --- per-image collect ---
-all_gts = {}          # image_stem -> list of gt boxes (x1,y1,x2,y2,gender,race,body)
-all_pds = {}          # image_stem -> list of [x1,y1,x2,y2,conf,gender,race,body]
+all_gts = {}  # image_stem -> list of gt boxes (x1,y1,x2,y2,gender,race,body)
+all_pds = {}  # image_stem -> list of [x1,y1,x2,y2,conf,gender,race,body]
 attr_match_m = {"gender": 0, "race": 0, "body_type": 0, "total": 0}  # matched only
 
 for img_path in tqdm(sorted(VAL_IMG.glob("*.*"))):
@@ -43,8 +47,14 @@ for img_path in tqdm(sorted(VAL_IMG.glob("*.*"))):
             g_gender, g_race, g_body = map(int, parts[5:8])
             img = cv2.imread(str(img_path))
             h_img, w_img = img.shape[:2]
-            xc *= w_img; yc *= h_img; w *= w_img; h *= h_img
-            x1 = xc - w / 2; y1 = yc - h / 2; x2 = xc + w / 2; y2 = yc + h / 2
+            xc *= w_img
+            yc *= h_img
+            w *= w_img
+            h *= h_img
+            x1 = xc - w / 2
+            y1 = yc - h / 2
+            x2 = xc + w / 2
+            y2 = yc + h / 2
             gts.append((x1, y1, x2, y2, g_gender, g_race, g_body))
     all_gts[stem] = gts
 
@@ -54,11 +64,11 @@ for img_path in tqdm(sorted(VAL_IMG.glob("*.*"))):
 
     pds = []
     if r.boxes is not None and len(r.boxes) > 0:
-        boxes = r.boxes.xyxy.cpu().numpy()   # (N, 4)
-        confs = r.boxes.conf.cpu().numpy()    # (N,)
-        gender = r.gender.cpu().numpy() if hasattr(r, 'gender') else np.zeros(len(boxes), dtype=int)
-        race = r.race.cpu().numpy() if hasattr(r, 'race') else np.zeros(len(boxes), dtype=int)
-        body_type = r.body_type.cpu().numpy() if hasattr(r, 'body_type') else np.zeros(len(boxes), dtype=int)
+        boxes = r.boxes.xyxy.cpu().numpy()  # (N, 4)
+        confs = r.boxes.conf.cpu().numpy()  # (N,)
+        gender = r.gender.cpu().numpy() if hasattr(r, "gender") else np.zeros(len(boxes), dtype=int)
+        race = r.race.cpu().numpy() if hasattr(r, "race") else np.zeros(len(boxes), dtype=int)
+        body_type = r.body_type.cpu().numpy() if hasattr(r, "body_type") else np.zeros(len(boxes), dtype=int)
         for j in range(len(boxes)):
             pds.append([*boxes[j], confs[j], int(gender[j]), int(race[j]), int(body_type[j])])
     all_pds[stem] = pds
@@ -146,11 +156,11 @@ for t in np.linspace(0, 1, 11):
     ap50 += p_at_r / 11.0
 
 # --- print results ---
-print(f"\n{'='*55}")
+print(f"\n{'=' * 55}")
 print(f"  Detection mAP@0.5  : {ap50:.4f}")
 print(f"  Total GT boxes     : {n_total_gt}")
 print(f"  Total PD boxes     : {len(pd_records)}")
-print(f"{'='*55}")
+print(f"{'=' * 55}")
 
 if attr_match_m["total"] > 0:
     print(f"  Attribute accuracy (matched boxes: {attr_match_m['total']}):")
@@ -159,4 +169,4 @@ if attr_match_m["total"] > 0:
     print(f"    body_acc     : {attr_match_m['body_type'] / attr_match_m['total']:.4f}")
 else:
     print("  No matched boxes for attribute evaluation.")
-print(f"{'='*55}")
+print(f"{'=' * 55}")
