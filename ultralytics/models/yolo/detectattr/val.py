@@ -100,9 +100,7 @@ class AttrDetectionValidator(DetectionValidator):
             if self.args.plots:
                 self.confusion_matrix.process_batch(pred, pbatch, conf=self.args.conf)
                 if self.args.visualize:
-                    self.confusion_matrix.plot_matches(
-                        batch["img"][si], pbatch["im_file"], self.save_dir
-                    )
+                    self.confusion_matrix.plot_matches(batch["img"][si], pbatch["im_file"], self.save_dir)
 
             if self.args.save_json or self.args.save_txt:
                 predn = self._prepare_pred(pred)
@@ -142,7 +140,7 @@ class AttrDetectionValidator(DetectionValidator):
                             if target < 0 or target >= self.attr_dims[ai]:
                                 continue
                             self.attr_total[name] += 1
-                            logits = extra[pd_i, offsets[ai]:offsets[ai + 1]]
+                            logits = extra[pd_i, offsets[ai] : offsets[ai + 1]]
                             if logits.argmax() == target:
                                 self.attr_correct[name] += 1
 
@@ -187,7 +185,9 @@ class AttrDetectionValidator(DetectionValidator):
             results[f"metrics/{name}_acc"] = self.attr_correct[name] / total if total > 0 else 0.0
 
         # Custom fitness: detection mAP (60%) + average attribute accuracy (40%)
-        attr_acc_avg = float(np.mean([results[f"metrics/{name}_acc"] for name in self.attr_names])) if self.attr_names else 0.0
+        attr_acc_avg = (
+            float(np.mean([results[f"metrics/{name}_acc"] for name in self.attr_names])) if self.attr_names else 0.0
+        )
         results["fitness"] = 0.6 * results["metrics/mAP50-95(B)"] + 0.4 * attr_acc_avg
         return results
 
@@ -217,7 +217,8 @@ class AttrDetectionValidator(DetectionValidator):
         if any(self.attr_total[name] > 0 for name in self.attr_names):
             parts = [
                 f"{name}: {self.attr_correct[name] / self.attr_total[name]:.4f} ({self.attr_total[name]})"
-                if self.attr_total[name] > 0 else f"{name}: n/a (0)"
+                if self.attr_total[name] > 0
+                else f"{name}: n/a (0)"
                 for name in self.attr_names
             ]
             LOGGER.info("Attribute accuracy — " + "  ".join(parts))
